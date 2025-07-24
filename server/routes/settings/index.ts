@@ -14,6 +14,7 @@ import type {
 import { scheduledJobs } from '@server/job/schedule';
 import type { AvailableCacheIds } from '@server/lib/cache';
 import cacheManager from '@server/lib/cache';
+import collectionsSync from '@server/lib/collectionsSync';
 import ImageProxy from '@server/lib/imageproxy';
 import { Permission } from '@server/lib/permissions';
 import { plexFullScanner } from '@server/lib/scanners/plex';
@@ -32,6 +33,7 @@ import { rescheduleJob } from 'node-schedule';
 import path from 'path';
 import semver from 'semver';
 import { URL } from 'url';
+import collectionsRoutes from './collections';
 import notificationRoutes from './notifications';
 import radarrRoutes from './radarr';
 import sonarrRoutes from './sonarr';
@@ -39,6 +41,7 @@ import sonarrRoutes from './sonarr';
 const settingsRoutes = Router();
 
 settingsRoutes.use('/notifications', notificationRoutes);
+settingsRoutes.use('/plex/collections', collectionsRoutes);
 settingsRoutes.use('/radarr', radarrRoutes);
 settingsRoutes.use('/sonarr', sonarrRoutes);
 settingsRoutes.use('/discover', discoverSettingRoutes);
@@ -100,7 +103,34 @@ settingsRoutes.post('/plex', async (req, res, next) => {
       where: { id: 1 },
     });
 
+    // Check if collections are being enabled for the first time
+    const wasCollectionsEnabled = settings.plex.collectionsEnabled;
+    const willBeCollectionsEnabled = req.body.collectionsEnabled;
+
     Object.assign(settings.plex, req.body);
+
+    // Set collectionsEverEnabled if collections are being enabled for the first time
+    if (
+      !wasCollectionsEnabled &&
+      willBeCollectionsEnabled &&
+      !settings.plex.collectionsEverEnabled
+    ) {
+      settings.plex.collectionsEverEnabled = true;
+    }
+
+    // Auto-trigger collections sync when collections are enabled
+    const shouldRunCollectionsSync =
+      !wasCollectionsEnabled && willBeCollectionsEnabled;
+
+    if (shouldRunCollectionsSync) {
+      logger.info('Auto-sync trigger detected', {
+        label: 'Settings API',
+        wasCollectionsEnabled,
+        willBeCollectionsEnabled,
+        reason:
+          'Collections being enabled for first time or after being disabled',
+      });
+    }
 
     const plexClient = new PlexAPI({ plexToken: admin.plexToken });
 
@@ -113,7 +143,114 @@ settingsRoutes.post('/plex', async (req, res, next) => {
     settings.plex.machineId = result.MediaContainer.machineIdentifier;
     settings.plex.name = result.MediaContainer.friendlyName;
 
+    // Check Plex Pass
+    let hasPlexPass = false;
+    if (req.body.checkPlexPass) {
+      try {
+        hasPlexPass = await plexClient.checkPlexPass();
+        logger.info(
+          `Plex Pass check result: ${hasPlexPass ? 'Active' : 'Inactive'}`,
+          {
+            label: 'Settings API',
+          }
+        );
+      } catch (plexPassError) {
+        logger.warn('Could not check Plex Pass status', {
+          label: 'Settings API',
+          error:
+            plexPassError instanceof Error
+              ? plexPassError.message
+              : 'Unknown error',
+        });
+      }
+    }
+
+    // Handle purge operations
+    let purgeResult = null;
+    if (req.body.purgeCollections) {
+      try {
+        purgeResult = await collectionsSync.purgeAllCollections(true);
+        logger.info(`Purged ${purgeResult.deleted} Overseerr collections`, {
+          label: 'Settings API',
+        });
+      } catch (error) {
+        logger.error('Error purging collections', {
+          label: 'Settings API',
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+        throw new Error(
+          `Failed to purge collections: ${
+            error instanceof Error ? error.message : 'Unknown error'
+          }`
+        );
+      }
+    }
+
+    if (req.body.purgeUserLabels) {
+      try {
+        purgeResult = await collectionsSync.purgeUserLabels(true);
+        logger.info(
+          `Purged user label restrictions: ${purgeResult.successful} successful, ${purgeResult.failed} failed`,
+          {
+            label: 'Settings API',
+          }
+        );
+      } catch (error) {
+        logger.error('Error purging user labels', {
+          label: 'Settings API',
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+        throw new Error(
+          `Failed to purge user labels: ${
+            error instanceof Error ? error.message : 'Unknown error'
+          }`
+        );
+      }
+    }
+
     settings.save();
+
+    // Auto-trigger collections sync when collections are enabled
+    if (shouldRunCollectionsSync) {
+      try {
+        logger.info(
+          'Auto-triggering collections sync after enabling collections',
+          {
+            label: 'Settings API',
+          }
+        );
+
+        // Don't await - let it run in background like purge operations (manual operation)
+        collectionsSync.run(true);
+
+        logger.info('Collections sync started successfully after enable', {
+          label: 'Settings API',
+        });
+      } catch (error) {
+        logger.error('Error auto-starting collections sync', {
+          label: 'Settings API',
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+        // Don't throw - this is a secondary action
+      }
+    }
+
+    // Include Plex Pass status if checked and purge results
+    const response = {
+      ...settings.plex,
+      ...(req.body.checkPlexPass && {
+        hasPlexPass,
+        plexPassMessage: hasPlexPass
+          ? 'Plex Pass is active - collections with privacy features are supported'
+          : 'Plex Pass is required for collection privacy features',
+      }),
+      ...(purgeResult && {
+        status: 'success',
+        ...purgeResult,
+      }),
+    };
+
+    return res.status(200).json(response);
   } catch (e) {
     logger.error('Something went wrong testing Plex connection', {
       label: 'API',

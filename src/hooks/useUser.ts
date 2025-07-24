@@ -11,12 +11,14 @@ export type { PermissionCheckOptions };
 export interface User {
   id: number;
   plexUsername?: string;
+  plexTitle?: string;
   username?: string;
   displayName: string;
   email: string;
   avatar: string;
   permissions: number;
   userType: number;
+  hasPlexPass: boolean;
   createdAt: Date;
   updatedAt: Date;
   requestCount: number;

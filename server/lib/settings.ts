@@ -33,6 +33,10 @@ export interface PlexSettings {
   useSsl?: boolean;
   libraries: Library[];
   webAppUrl?: string;
+  collectionsEnabled?: boolean;
+  collectionsEverEnabled?: boolean;
+  collectionTemplate?: string;
+  collectionVisibility?: 'none' | 'all' | 'admin' | 'shared';
 }
 
 export interface TautulliSettings {
@@ -249,6 +253,7 @@ export type JobId =
   | 'plex-full-scan'
   | 'plex-watchlist-sync'
   | 'plex-refresh-token'
+  | 'plex-collections-sync'
   | 'radarr-scan'
   | 'sonarr-scan'
   | 'download-sync'
@@ -308,6 +313,10 @@ class Settings {
         port: 32400,
         useSsl: false,
         libraries: [],
+        collectionsEnabled: false,
+        collectionsEverEnabled: false,
+        collectionTemplate: "{nickname}'s requests",
+        collectionVisibility: 'none',
       },
       tautulli: {},
       radarr: [],
@@ -430,6 +439,9 @@ class Settings {
         },
         'image-cache-cleanup': {
           schedule: '0 0 5 * * *',
+        },
+        'plex-collections-sync': {
+          schedule: '0 */15 * * * *',
         },
       },
     };

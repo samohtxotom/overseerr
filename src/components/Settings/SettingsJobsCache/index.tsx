@@ -60,6 +60,7 @@ const messages: { [messageName: string]: MessageDescriptor } = defineMessages({
   'download-sync': 'Download Sync',
   'download-sync-reset': 'Download Sync Reset',
   'image-cache-cleanup': 'Image Cache Cleanup',
+  'plex-collections-sync': 'Plex Collections Sync',
   editJobSchedule: 'Modify Job',
   jobScheduleEditSaved: 'Job edited successfully!',
   jobScheduleEditFailed: 'Something went wrong while saving the job.',
@@ -76,6 +77,8 @@ const messages: { [messageName: string]: MessageDescriptor } = defineMessages({
     'When enabled in settings, Overseerr will proxy and cache images from pre-configured external sources. Cached images are saved into your config folder. You can find the files in <code>{appDataPath}/cache/images</code>.',
   imagecachecount: 'Images Cached',
   imagecachesize: 'Total Cache Size',
+  toastCollectionsSyncSkipped:
+    'Plex collections sync skipped - collections are disabled. Enable collections in Plex settings to run this job.',
 });
 
 interface Job {
@@ -166,6 +169,24 @@ const SettingsJobs = () => {
 
   const runJob = async (job: Job) => {
     await axios.post(`/api/v1/settings/jobs/${job.id}/run`);
+
+    // Special handling for plex collections sync when collections are disabled
+    if (job.id === 'plex-collections-sync') {
+      try {
+        const plexSettings = await axios.get('/api/v1/settings/plex');
+        if (!plexSettings.data.collectionsEnabled) {
+          addToast(intl.formatMessage(messages.toastCollectionsSyncSkipped), {
+            appearance: 'warning',
+            autoDismiss: true,
+          });
+          revalidate();
+          return;
+        }
+      } catch (error) {
+        // If we can't check settings, just proceed with normal message
+      }
+    }
+
     addToast(
       intl.formatMessage(messages.jobstarted, {
         jobname: intl.formatMessage(messages[job.id] ?? messages.unknownJob),

@@ -1,4 +1,5 @@
 import availabilitySync from '@server/lib/availabilitySync';
+import collectionsSync from '@server/lib/collectionsSync';
 import downloadTracker from '@server/lib/downloadtracker';
 import ImageProxy from '@server/lib/imageproxy';
 import refreshToken from '@server/lib/refreshToken';
@@ -121,6 +122,22 @@ export const startJobs = (): void => {
     }),
     running: () => availabilitySync.running,
     cancelFn: () => availabilitySync.cancel(),
+  });
+
+  scheduledJobs.push({
+    id: 'plex-collections-sync',
+    name: 'Plex Collections Sync',
+    type: 'process',
+    interval: 'minutes',
+    cronSchedule: jobs['plex-collections-sync'].schedule,
+    job: schedule.scheduleJob(jobs['plex-collections-sync'].schedule, () => {
+      logger.info('Starting scheduled job: Plex Collections Sync', {
+        label: 'Jobs',
+      });
+      collectionsSync.run();
+    }),
+    running: () => collectionsSync.status.running,
+    cancelFn: () => collectionsSync.cancel(),
   });
 
   // Run download sync every minute

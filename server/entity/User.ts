@@ -59,6 +59,12 @@ export class User {
   public plexUsername?: string;
 
   @Column({ nullable: true })
+  public plexTitle?: string;
+
+  @Column({ type: 'boolean', default: false })
+  public hasPlexPass = false;
+
+  @Column({ nullable: true })
   public username?: string;
 
   @Column({ nullable: true, select: false })

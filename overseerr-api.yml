@@ -2111,6 +2111,117 @@ paths:
                       type: string
                     thumb:
                       type: string
+  /settings/plex/collections/sync:
+    get:
+      summary: Get Plex collections sync status
+      description: Returns the current status of the Plex collections sync job.
+      tags:
+        - settings
+      responses:
+        '200':
+          description: Collections sync status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  running:
+                    type: boolean
+                    example: false
+                  cancelled:
+                    type: boolean
+                    example: false
+                  progress:
+                    type: object
+                    properties:
+                      running:
+                        type: boolean
+                        example: false
+                      cancelled:
+                        type: boolean
+                        example: false
+                      currentStep:
+                        type: string
+                        example: "Collections sync completed"
+                      progress:
+                        type: number
+                        example: 100
+                      total:
+                        type: number
+                        example: 100
+                      details:
+                        type: object
+                        properties:
+                          usersProcessed:
+                            type: number
+                            example: 5
+                          totalUsers:
+                            type: number
+                            example: 5
+                          collectionsCreated:
+                            type: number
+                            example: 3
+                          collectionsUpdated:
+                            type: number
+                            example: 2
+                          collectionsDeleted:
+                            type: number
+                            example: 1
+    post:
+      summary: Start Plex collections sync
+      description: Manually triggers a Plex collections sync job.
+      tags:
+        - settings
+      responses:
+        '200':
+          description: Collections sync started successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "success"
+                  message:
+                    type: string
+                    example: "Collections sync completed successfully"
+                  hasPlexPass:
+                    type: boolean
+                    example: true
+        '400':
+          description: Bad request (collections disabled, no Plex connection, etc.)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "error"
+                  message:
+                    type: string
+                    example: "Plex collections are not enabled"
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "error"
+                  message:
+                    type: string
+                    example: "An error occurred during collections sync"
+                  error:
+                    type: string
+                    example: "Could not connect to Plex server"
+        '400':
+          description: Bad request
+        '500':
+          description: Server error
   /settings/tautulli:
     get:
       summary: Get Tautulli settings

@@ -517,6 +517,7 @@ router.post(
             user.avatar = account.thumb;
             user.email = account.email;
             user.plexUsername = account.username;
+            user.plexTitle = account.title;
 
             // In case the user was previously a local account
             if (user.userType === UserType.LOCAL) {
@@ -528,6 +529,7 @@ router.post(
             if (await mainPlexTv.checkUserAccess(parseInt(account.id))) {
               const newUser = new User({
                 plexUsername: account.username,
+                plexTitle: account.title,
                 email: account.email,
                 permissions: settings.main.defaultPermissions,
                 plexId: parseInt(account.id),

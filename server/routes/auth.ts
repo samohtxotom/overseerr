@@ -58,6 +58,8 @@ authRoutes.post('/plex', async (req, res, next) => {
         plexToken: account.authToken,
         permissions: Permission.ADMIN,
         avatar: account.thumb,
+        plexTitle: account.title,
+        hasPlexPass: account.roles?.roles?.includes('plexpass') || false,
         userType: UserType.PLEX,
       });
 
@@ -108,6 +110,9 @@ authRoutes.post('/plex', async (req, res, next) => {
           user.avatar = account.thumb;
           user.email = account.email;
           user.plexUsername = account.username;
+          user.plexTitle = account.title;
+          user.hasPlexPass =
+            account.roles?.roles?.includes('plexpass') || false;
           user.userType = UserType.PLEX;
 
           await userRepository.save(user);
@@ -144,6 +149,8 @@ authRoutes.post('/plex', async (req, res, next) => {
             plexToken: account.authToken,
             permissions: settings.main.defaultPermissions,
             avatar: account.thumb,
+            plexTitle: account.title,
+            hasPlexPass: account.roles?.roles?.includes('plexpass') || false,
             userType: UserType.PLEX,
           });
 
@@ -253,6 +260,8 @@ authRoutes.post('/local', async (req, res, next) => {
           user.avatar = account.thumb;
           user.email = account.email;
           user.plexUsername = account.username;
+          user.plexTitle = account.title;
+          user.hasPlexPass = false; // Shared users don't have Plex Pass
           user.userType = UserType.PLEX;
 
           await userRepository.save(user);
