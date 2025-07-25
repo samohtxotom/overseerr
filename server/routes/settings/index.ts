@@ -165,46 +165,70 @@ settingsRoutes.post('/plex', async (req, res, next) => {
       }
     }
 
-    // Handle purge operations
+    // Handle purge operations - use combined purge when both are requested
     let purgeResult = null;
-    if (req.body.purgeCollections) {
+    if (req.body.purgeCollections && req.body.purgeUserLabels) {
+      // Combined purge operation with unified progress tracking
       try {
-        purgeResult = await collectionsSync.purgeAllCollections(true);
-        logger.info(`Purged ${purgeResult.deleted} Overseerr collections`, {
-          label: 'Settings API',
-        });
-      } catch (error) {
-        logger.error('Error purging collections', {
-          label: 'Settings API',
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-        throw new Error(
-          `Failed to purge collections: ${
-            error instanceof Error ? error.message : 'Unknown error'
-          }`
-        );
-      }
-    }
-
-    if (req.body.purgeUserLabels) {
-      try {
-        purgeResult = await collectionsSync.purgeUserLabels(true);
+        purgeResult = await collectionsSync.purgeAllData(true);
         logger.info(
-          `Purged user label restrictions: ${purgeResult.successful} successful, ${purgeResult.failed} failed`,
+          `Combined purge completed: ${purgeResult.collectionsDeleted} collections deleted, ${purgeResult.usersProcessed} users processed (${purgeResult.labelsSuccessful} successful, ${purgeResult.labelsFailed} failed)`,
           {
             label: 'Settings API',
           }
         );
       } catch (error) {
-        logger.error('Error purging user labels', {
+        logger.error('Error in combined purge operation', {
           label: 'Settings API',
           error: error instanceof Error ? error.message : 'Unknown error',
         });
         throw new Error(
-          `Failed to purge user labels: ${
+          `Failed to purge data: ${
             error instanceof Error ? error.message : 'Unknown error'
           }`
         );
+      }
+    } else {
+      // Individual purge operations (fallback for separate requests)
+      if (req.body.purgeCollections) {
+        try {
+          purgeResult = await collectionsSync.purgeAllCollections(true);
+          logger.info(`Purged ${purgeResult.deleted} Overseerr collections`, {
+            label: 'Settings API',
+          });
+        } catch (error) {
+          logger.error('Error purging collections', {
+            label: 'Settings API',
+            error: error instanceof Error ? error.message : 'Unknown error',
+          });
+          throw new Error(
+            `Failed to purge collections: ${
+              error instanceof Error ? error.message : 'Unknown error'
+            }`
+          );
+        }
+      }
+
+      if (req.body.purgeUserLabels) {
+        try {
+          const labelsPurgeResult = await collectionsSync.purgeUserLabels(true);
+          logger.info(
+            `Purged user label restrictions: ${labelsPurgeResult.successful} successful, ${labelsPurgeResult.failed} failed`,
+            {
+              label: 'Settings API',
+            }
+          );
+        } catch (error) {
+          logger.error('Error purging user labels', {
+            label: 'Settings API',
+            error: error instanceof Error ? error.message : 'Unknown error',
+          });
+          throw new Error(
+            `Failed to purge user labels: ${
+              error instanceof Error ? error.message : 'Unknown error'
+            }`
+          );
+        }
       }
     }
 

@@ -7,6 +7,8 @@ import { getSettings } from '@server/lib/settings';
 import logger from '@server/logger';
 import xml2js from 'xml2js';
 
+// TYPE DEFINITIONS
+
 interface CollectionItem {
   ratingKey: string;
   type: 'movie' | 'tv';
@@ -62,6 +64,7 @@ interface SyncProgress {
   total: number;
   isPurgeOperation: boolean;
   isManualOperation: boolean;
+  eta?: number | null; // Estimated time to completion in milliseconds
   details: {
     usersProcessed: number;
     totalUsers: number;
@@ -105,7 +108,9 @@ interface ProgressState {
   stepHistory: { name: string; duration: number; timestamp: number }[];
 }
 
-class EnhancedProgressTracker {
+// PROGRESS TRACKING SYSTEM
+
+class ProgressTracker {
   private steps: ProgressStep[] = [];
   private state: ProgressState;
   private onProgressUpdate: (
@@ -132,9 +137,6 @@ class EnhancedProgressTracker {
     };
   }
 
-  /**
-   * Initialize the progress tracker with weighted steps
-   */
   initializeSteps(steps: ProgressStep[]): void {
     this.steps = steps.map((step) => ({ ...step, isCompleted: false }));
     this.state.totalWeight = this.calculateTotalWeight(this.steps);
@@ -325,11 +327,13 @@ class EnhancedProgressTracker {
   }
 }
 
+// MAIN COLLECTIONS SYNC SERVICE
+
 class CollectionsSync {
   private running = false;
   private cancelled = false;
   private processedCollections = new Set<string>();
-  private progressTracker: EnhancedProgressTracker | null = null;
+  private progressTracker: ProgressTracker | null = null;
   private syncProgress: SyncProgress = {
     running: false,
     cancelled: false,
@@ -363,7 +367,7 @@ class CollectionsSync {
     });
   }
 
-  private updateProgress(
+  private updateProgressDetails(
     step: string,
     completed: number,
     total?: number,
@@ -387,10 +391,7 @@ class CollectionsSync {
     }
   }
 
-  /**
-   * Enhanced progress update method using the new progress tracker
-   */
-  private updateEnhancedProgress(
+  private updateProgress(
     step: string,
     progress: number,
     details?: ProgressDetails
@@ -398,19 +399,24 @@ class CollectionsSync {
     this.syncProgress.currentStep = step;
     this.syncProgress.progress = Math.min(Math.max(progress, 0), 100);
 
+    // Update ETA if available
+    if (details?.eta !== undefined) {
+      this.syncProgress.eta = details.eta;
+    }
+
     if (details) {
-      // Merge enhanced details with existing details
+      // Merge details with existing details
       Object.assign(this.syncProgress.details, details);
     }
   }
 
   /**
-   * Initialize enhanced progress tracking for sync operations
+   * Initialize progress tracking for sync operations
    */
   private initializeSyncProgressTracker(): void {
-    this.progressTracker = new EnhancedProgressTracker(
+    this.progressTracker = new ProgressTracker(
       (step: string, progress: number, details?: ProgressDetails) => {
-        this.updateEnhancedProgress(step, progress, details);
+        this.updateProgress(step, progress, details);
       }
     );
 
@@ -434,12 +440,12 @@ class CollectionsSync {
   }
 
   /**
-   * Initialize enhanced progress tracking for purge operations
+   * Initialize progress tracking for purge operations
    */
   private initializePurgeProgressTracker(): void {
-    this.progressTracker = new EnhancedProgressTracker(
+    this.progressTracker = new ProgressTracker(
       (step: string, progress: number, details?: ProgressDetails) => {
-        this.updateEnhancedProgress(step, progress, details);
+        this.updateProgress(step, progress, details);
       }
     );
 
@@ -523,7 +529,7 @@ class CollectionsSync {
       },
     };
 
-    // Initialize enhanced progress tracking
+    // Initialize progress tracking
     this.initializeSyncProgressTracker();
 
     const startTime = Date.now();
@@ -544,7 +550,7 @@ class CollectionsSync {
       this.progressTracker?.completeStep('Connecting to Plex server');
 
       // Perform the sync operations
-      await this.syncCollectionsEnhanced(plexClient);
+      await this.syncCollections(plexClient);
 
       const duration = Date.now() - startTime;
       logger.info(
@@ -566,10 +572,9 @@ class CollectionsSync {
     }
   }
 
-  /**
-   * Enhanced sync method using the new progress tracker
-   */
-  private async syncCollectionsEnhanced(plexClient: PlexAPI): Promise<void> {
+  // CORE SYNC OPERATIONS
+
+  private async syncCollections(plexClient: PlexAPI): Promise<void> {
     if (this.cancelled) return;
 
     try {
@@ -617,8 +622,8 @@ class CollectionsSync {
 
       this.progressTracker?.completeStep('Updating user titles');
 
-      // Create/update collections for each user with enhanced progress tracking
-      const collectionStats = await this.processUserCollectionsEnhanced(
+      // Create/update collections for each user with progress tracking
+      const collectionStats = await this.processUserCollections(
         userCollections,
         plexClient
       );
@@ -657,6 +662,8 @@ class CollectionsSync {
       throw new Error(`Plex collections sync failed: ${errorMessage}`);
     }
   }
+
+  // USER MANAGEMENT
 
   /**
    * Update plexTitle for users who have null values (needed for nickname support)
@@ -698,7 +705,7 @@ class CollectionsSync {
       const plexTv = new PlexTvAPI(mainUser.plexToken ?? '');
       const plexUsersResponse = await plexTv.getUsers();
 
-      let updatedCount = 0;
+      const usersToUpdate: User[] = [];
 
       for (const user of usersNeedingUpdate) {
         if (this.cancelled) break;
@@ -711,8 +718,7 @@ class CollectionsSync {
 
           if (plexAccount?.title) {
             user.plexTitle = plexAccount.title;
-            await userRepository.save(user);
-            updatedCount++;
+            usersToUpdate.push(user);
           }
         } catch (error) {
           logger.warn(
@@ -721,6 +727,20 @@ class CollectionsSync {
               label: 'Collections Sync',
             }
           );
+        }
+      }
+
+      // Batch save all user updates
+      let updatedCount = 0;
+      if (usersToUpdate.length > 0) {
+        try {
+          await userRepository.save(usersToUpdate);
+          updatedCount = usersToUpdate.length;
+        } catch (error) {
+          logger.error('Failed to batch update user titles', {
+            label: 'Collections Sync',
+            error: error instanceof Error ? error.message : 'Unknown error',
+          });
         }
       }
 
@@ -796,7 +816,7 @@ class CollectionsSync {
       for (const request of completedRequests) {
         if (this.cancelled) break;
 
-        // Safely check if media exists
+        // Check if media exists
         if (!request.media) {
           continue;
         }
@@ -885,9 +905,9 @@ class CollectionsSync {
   }
 
   /**
-   * Process collections for all users with enhanced progress tracking
+   * Process collections for all users with progress tracking
    */
-  private async processUserCollectionsEnhanced(
+  private async processUserCollections(
     userCollections: UserCollections,
     plexClient: PlexAPI
   ): Promise<{ created: number; updated: number }> {
@@ -980,6 +1000,8 @@ class CollectionsSync {
 
     return { created, updated };
   }
+
+  // COLLECTION MANAGEMENT
 
   /**
    * Create or update a Plex collection for a specific user
@@ -1214,6 +1236,8 @@ class CollectionsSync {
     }
   }
 
+  // CLEANUP OPERATIONS
+
   /**
    * Remove collections for items that are no longer requested
    * This method can be called periodically to clean up old collections
@@ -1288,6 +1312,347 @@ class CollectionsSync {
   }
 
   /**
+   * Combined purge operation - removes all Overseerr collections and user labels
+   */
+  async purgeAllData(isManual = false): Promise<{
+    collectionsDeleted: number;
+    usersProcessed: number;
+    labelsSuccessful: number;
+    labelsFailed: number;
+  }> {
+    logger.info('Starting combined purge of all Overseerr data', {
+      label: 'Collections Sync',
+    });
+
+    // Set running state and initialize progress
+    this.running = true;
+    this.syncProgress = {
+      running: true,
+      cancelled: false,
+      currentStep: 'Starting data purge...',
+      progress: 0,
+      total: 100,
+      isPurgeOperation: true,
+      isManualOperation: isManual,
+      details: {
+        usersProcessed: 0,
+        totalUsers: 0,
+        collectionsCreated: 0,
+        collectionsUpdated: 0,
+        collectionsDeleted: 0,
+      },
+    };
+
+    // Initialize combined progress tracking
+    this.progressTracker = new ProgressTracker(
+      (step: string, progress: number, details?: ProgressDetails) => {
+        this.updateProgress(step, progress, details);
+      }
+    );
+
+    const combinedSteps: ProgressStep[] = [
+      { name: 'Connecting to Plex server', weight: 1, isCompleted: false },
+      { name: 'Fetching collections to delete', weight: 2, isCompleted: false },
+      {
+        name: 'Deleting collections',
+        weight: 5,
+        isCompleted: false,
+        estimatedCount: 1,
+      },
+      { name: 'Connecting to Plex.tv', weight: 1, isCompleted: false },
+      { name: 'Fetching users for labels', weight: 2, isCompleted: false },
+      {
+        name: 'Cleaning user labels',
+        weight: 5,
+        isCompleted: false,
+        estimatedCount: 1,
+      },
+    ];
+
+    this.progressTracker.initializeSteps(combinedSteps);
+
+    try {
+      const settings = getSettings();
+
+      // Get admin user for Plex token
+      const userRepository = getRepository(User);
+      const admin = await userRepository.findOne({
+        where: { id: 1 },
+        select: { id: true, plexToken: true },
+      });
+
+      if (!admin?.plexToken) {
+        throw new Error('No admin Plex token found');
+      }
+
+      // Initialize Plex client
+      const plexClient = new PlexAPI({
+        plexToken: admin.plexToken,
+        plexSettings: settings.plex,
+      });
+
+      // Test connection
+      const isConnected = await plexClient.getStatus();
+      if (!isConnected) {
+        throw new Error('Could not connect to Plex server');
+      }
+
+      this.progressTracker?.completeStep('Connecting to Plex server');
+
+      // PHASE 1: Delete Collections
+      const collectionsResult = await this.purgeCollectionsInternal(plexClient);
+
+      // PHASE 2: Clean User Labels
+      // Complete the "Connecting to Plex.tv" step before starting user labels
+      this.progressTracker?.completeStep('Connecting to Plex.tv');
+      const labelsResult = await this.purgeUserLabelsInternal(admin.plexToken);
+
+      // Final completion
+      this.syncProgress = {
+        ...this.syncProgress,
+        running: false,
+        currentStep: 'Purge completed successfully',
+        progress: 100,
+        details: {
+          ...this.syncProgress.details,
+          collectionsDeleted: collectionsResult.deleted,
+          usersProcessed: labelsResult.processed,
+        },
+      };
+
+      const result = {
+        collectionsDeleted: collectionsResult.deleted,
+        usersProcessed: labelsResult.processed,
+        labelsSuccessful: labelsResult.successful,
+        labelsFailed: labelsResult.failed,
+      };
+
+      logger.info(
+        `Combined purge completed: ${result.collectionsDeleted} collections deleted, ${result.usersProcessed} users processed (${result.labelsSuccessful} successful, ${result.labelsFailed} failed)`,
+        {
+          label: 'Collections Sync',
+        }
+      );
+
+      return result;
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : 'Unknown error';
+
+      this.syncProgress = {
+        ...this.syncProgress,
+        running: false,
+        currentStep: `Purge failed: ${errorMessage}`,
+        progress: 0,
+      };
+
+      logger.error(`Error during combined purge: ${errorMessage}`);
+      throw new Error(`Combined purge failed: ${errorMessage}`);
+    } finally {
+      this.running = false;
+      this.progressTracker = null;
+    }
+  }
+
+  /**
+   * Internal method for collections purge (used by combined operation)
+   */
+  private async purgeCollectionsInternal(
+    plexClient: PlexAPI
+  ): Promise<{ deleted: number }> {
+    // Get all collections with overseerr labels
+    const allCollections = await plexClient.getAllCollections();
+    const overseerrCollections = allCollections.filter((collection) =>
+      collection.labels?.some((label: string) =>
+        label.toLowerCase().startsWith('overseerr')
+      )
+    );
+
+    const totalCollections = overseerrCollections.length;
+
+    // Update the deleting collections step with actual collection count
+    this.progressTracker?.updateStepWithDiscovery(
+      'Deleting collections',
+      totalCollections
+    );
+
+    this.progressTracker?.completeStep('Fetching collections to delete');
+
+    let deleted = 0;
+
+    // Delete all overseerr collections
+    for (let i = 0; i < overseerrCollections.length; i++) {
+      const collection = overseerrCollections[i];
+      try {
+        await plexClient.deleteCollection(collection.ratingKey);
+        deleted++;
+
+        // Update progress based on deletion progress
+        this.progressTracker?.updateStepProgress(
+          'Deleting collections',
+          deleted,
+          totalCollections,
+          {
+            collectionsDeleted: deleted,
+          }
+        );
+
+        if (this.cancelled) break;
+      } catch (error) {
+        logger.warn(
+          `Failed to delete collection ${collection.title} (${collection.ratingKey})`,
+          {
+            label: 'Collections Sync',
+            error: error instanceof Error ? error.message : 'Unknown error',
+          }
+        );
+      }
+    }
+
+    this.progressTracker?.completeStep('Deleting collections');
+    return { deleted };
+  }
+
+  /**
+   * Internal method for user labels purge (used by combined operation)
+   */
+  private async purgeUserLabelsInternal(plexToken: string): Promise<{
+    processed: number;
+    successful: number;
+    failed: number;
+  }> {
+    // Initialize PlexTV API to get user data with server settings
+    const plexTvClient = new PlexTvAPI(plexToken);
+    const plexUsersResponse = await plexTvClient.getUsers();
+    const plexUsers = plexUsersResponse.MediaContainer.User;
+
+    // Note: 'Connecting to Plex.tv' step is completed by the caller in combined operations
+
+    // Get all users with Plex IDs from our database
+    const userRepository = getRepository(User);
+    const users = await userRepository
+      .createQueryBuilder('user')
+      .select([
+        'user.id',
+        'user.plexId',
+        'user.email',
+        'user.plexUsername',
+        'user.plexTitle',
+        'user.username',
+      ])
+      .where('user.plexId IS NOT NULL')
+      .getMany();
+
+    // Update processing user labels step with actual user count
+    this.progressTracker?.updateStepWithDiscovery(
+      'Cleaning user labels',
+      users.length,
+      {
+        totalUsers: users.length,
+      }
+    );
+
+    this.progressTracker?.completeStep('Fetching users for labels');
+
+    let processed = 0;
+    let successful = 0;
+    let failed = 0;
+
+    // Process each user's label restrictions
+    for (const user of users) {
+      if (this.cancelled) break;
+
+      // Skip admin user (ID 1) or users without plexId
+      if (user.id === 1 || !user.plexId) {
+        processed++;
+        continue;
+      }
+
+      try {
+        const plexUser = plexUsers.find(
+          (pu: any) => pu.$.id === user.plexId?.toString()
+        );
+        if (!plexUser) {
+          processed++;
+          failed++;
+          continue;
+        }
+
+        // Get current restrictions
+        const currentMovieFilter = plexUser.$.filterMovies || '';
+        const currentTvFilter = plexUser.$.filterTelevision || '';
+
+        // Clean overseerr labels from filters
+        const cleanedMovieFilter =
+          this.cleanOverseerrLabels(currentMovieFilter);
+        const cleanedTvFilter = this.cleanOverseerrLabels(currentTvFilter);
+
+        // Only update if filters actually changed
+        if (
+          cleanedMovieFilter !== currentMovieFilter ||
+          cleanedTvFilter !== currentTvFilter
+        ) {
+          const settings = getSettings();
+          const url = `https://plex.tv/api/friends/${user.plexId}`;
+          const headers = {
+            'X-Plex-Token': plexToken,
+            Accept: 'application/json',
+            'Content-Type': 'application/x-www-form-urlencoded',
+          };
+
+          const payload = {
+            server_id: settings.plex.machineId,
+            filterMovies: cleanedMovieFilter,
+            filterTelevision: cleanedTvFilter,
+          };
+
+          const formData = this.createFormData(payload);
+
+          const response = await fetch(url, {
+            method: 'PUT',
+            headers: headers,
+            body: formData,
+          });
+
+          if (!response.ok) {
+            throw new Error(
+              `HTTP ${response.status}: ${await response.text()}`
+            );
+          }
+        }
+
+        processed++;
+        successful++;
+
+        // Update progress
+        this.progressTracker?.updateStepProgress(
+          'Cleaning user labels',
+          processed,
+          users.length,
+          {
+            usersProcessed: processed,
+          }
+        );
+      } catch (error) {
+        processed++;
+        failed++;
+        logger.warn(
+          `Failed to clean labels for user ${
+            user.plexUsername || user.username
+          }`,
+          {
+            label: 'Collections Sync',
+            error: error instanceof Error ? error.message : 'Unknown error',
+          }
+        );
+      }
+    }
+
+    this.progressTracker?.completeStep('Cleaning user labels');
+    return { processed, successful, failed };
+  }
+
+  /**
    * Purge all Overseerr collections from Plex
    */
   async purgeAllCollections(isManual = false): Promise<{ deleted: number }> {
@@ -1314,7 +1679,7 @@ class CollectionsSync {
       },
     };
 
-    // Initialize enhanced progress tracking for purge
+    // Initialize progress tracking for purge
     this.initializePurgeProgressTracker();
 
     try {
@@ -1365,7 +1730,7 @@ class CollectionsSync {
 
       let deleted = 0;
 
-      // Delete all overseerr collections with enhanced progress tracking
+      // Delete all overseerr collections with progress tracking
       for (let i = 0; i < overseerrCollections.length; i++) {
         const collection = overseerrCollections[i];
         try {
@@ -1446,14 +1811,21 @@ class CollectionsSync {
     const settings = getSettings();
 
     const variables: Record<string, string> = {
-      username: user.plexUsername || user.username || user.email || '',
-      nickname: user.plexTitle || user.displayName || '',
+      username: (
+        user.plexUsername ||
+        user.username ||
+        user.email ||
+        ''
+      ).replace(/[<>"'&]/g, ''),
+      nickname: (user.plexTitle || user.displayName || '').replace(
+        /[<>"'&]/g,
+        ''
+      ),
       domain: this.extractDomain(
         settings.main.applicationUrl || settings.plex.webAppUrl
       ),
       appTitle: settings.main.applicationTitle || 'Overseerr',
-      // Legacy support
-      user: this.getUserDisplayName(user),
+      user: this.getUserDisplayName(user).replace(/[<>"'&]/g, ''),
       site: settings.main.applicationTitle || 'Overseerr',
     };
 
@@ -1467,9 +1839,15 @@ class CollectionsSync {
     // Clean up any extra spaces and ensure we have a valid collection name
     result = result.replace(/\s+/g, ' ').trim();
 
+    // Remove any remaining potentially problematic characters
+    result = result.replace(/[<>"'&]/g, '');
+
     // Fallback to basic format if result is empty or just whitespace
     if (!result || result.length === 0) {
-      result = `Requested by ${this.getUserDisplayName(user)}`;
+      result = `Requested by ${this.getUserDisplayName(user).replace(
+        /[<>"'&]/g,
+        ''
+      )}`;
     }
 
     return result;
@@ -1490,7 +1868,10 @@ class CollectionsSync {
     }
 
     // Ultimate fallback
-    return `${this.getUserDisplayName(user)}'s requests`;
+    return `${this.getUserDisplayName(user).replace(
+      /[<>"'&]/g,
+      ''
+    )}'s requests`;
   }
 
   /**
@@ -1558,10 +1939,10 @@ class CollectionsSync {
       },
     };
 
-    // Initialize enhanced progress tracking for user labels purge
-    this.progressTracker = new EnhancedProgressTracker(
+    // Initialize progress tracking for user labels purge
+    this.progressTracker = new ProgressTracker(
       (step: string, progress: number, details?: ProgressDetails) => {
-        this.updateEnhancedProgress(step, progress, details);
+        this.updateProgress(step, progress, details);
       }
     );
 

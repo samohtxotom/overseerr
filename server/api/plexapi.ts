@@ -3,6 +3,13 @@ import { getSettings } from '@server/lib/settings';
 import logger from '@server/logger';
 import NodePlexAPI from 'plex-api';
 
+// Extended interface for type-safe Plex API HTTP methods
+interface ExtendedPlexAPI extends NodePlexAPI {
+  postQuery?: (url: string) => Promise<unknown>;
+  putQuery?: (url: string) => Promise<void>;
+  deleteQuery?: (url: string) => Promise<void>;
+}
+
 export interface PlexLibraryItem {
   ratingKey: string;
   parentRatingKey?: string;
@@ -122,6 +129,40 @@ interface PlexCollectionResponse {
 class PlexAPI {
   private plexClient: NodePlexAPI;
 
+  private getExtendedClient(): ExtendedPlexAPI {
+    return this.plexClient as ExtendedPlexAPI;
+  }
+
+  private async safePostQuery(url: string): Promise<unknown> {
+    const client = this.getExtendedClient();
+    if (typeof client.postQuery !== 'function') {
+      throw new Error(
+        'POST operations are not supported by this Plex API version'
+      );
+    }
+    return client.postQuery(url);
+  }
+
+  private async safePutQuery(url: string): Promise<void> {
+    const client = this.getExtendedClient();
+    if (typeof client.putQuery !== 'function') {
+      throw new Error(
+        'PUT operations are not supported by this Plex API version'
+      );
+    }
+    return client.putQuery(url);
+  }
+
+  private async safeDeleteQuery(url: string): Promise<void> {
+    const client = this.getExtendedClient();
+    if (typeof client.deleteQuery !== 'function') {
+      throw new Error(
+        'DELETE operations are not supported by this Plex API version'
+      );
+    }
+    return client.deleteQuery(url);
+  }
+
   constructor({
     plexToken,
     plexSettings,
@@ -167,9 +208,6 @@ class PlexAPI {
     return await this.plexClient.query('/');
   }
 
-  /**
-   * Simple Plex Pass check for UI purposes
-   */
   public async checkPlexPass(): Promise<boolean> {
     try {
       const response = await this.plexClient.query('/myplex/account');
@@ -470,11 +508,7 @@ class PlexAPI {
         title
       )}&smart=0&sectionId=${libraryKey}`;
 
-      const extendedClient = this.plexClient as NodePlexAPI & {
-        postQuery?: (url: string) => Promise<unknown>;
-      };
-
-      const result = await extendedClient.postQuery?.(createUrl);
+      const result = await this.safePostQuery(createUrl);
 
       let collectionRatingKey: string | null = null;
       if (result && typeof result === 'object' && 'MediaContainer' in result) {
@@ -502,16 +536,12 @@ class PlexAPI {
   ): Promise<void> {
     const machineId = getSettings().plex.machineId;
 
-    const extendedClient = this.plexClient as NodePlexAPI & {
-      putQuery?: (url: string) => Promise<void>;
-    };
-
     for (const item of items) {
       try {
         const uriParam = `server://${machineId}/com.plexapp.plugins.library/library/metadata/${item.ratingKey}`;
         const addUrl = `/library/collections/${collectionRatingKey}/items?uri=${uriParam}`;
 
-        await extendedClient.putQuery?.(addUrl);
+        await this.safePutQuery(addUrl);
       } catch (error) {
         logger.warn(`Failed to add item ${item.ratingKey} to collection`, {
           label: 'Plex API',
@@ -534,19 +564,11 @@ class PlexAPI {
         return;
       }
 
-      const extendedClient = this.plexClient as NodePlexAPI & {
-        deleteQuery?: (url: string) => Promise<void>;
-      };
-
       for (const item of items) {
         const removeUrl = `/library/collections/${collectionRatingKey}/items/${item.ratingKey}`;
 
         try {
-          if (typeof extendedClient.deleteQuery === 'function') {
-            await extendedClient.deleteQuery(removeUrl);
-          } else {
-            await this.plexClient.query(removeUrl);
-          }
+          await this.safeDeleteQuery(removeUrl);
         } catch (error) {
           const errorMessage = (error as Error).message;
           if (!errorMessage.includes('404')) {
@@ -588,13 +610,9 @@ class PlexAPI {
         .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
         .join('&');
 
-      const extendedClient = this.plexClient as NodePlexAPI & {
-        putQuery?: (url: string) => Promise<void>;
-      };
-
       const editUrl = `/library/metadata/${collectionRatingKey}?${queryString}`;
 
-      await extendedClient.putQuery?.(editUrl);
+      await this.safePutQuery(editUrl);
 
       return true;
     } catch (error) {
@@ -625,13 +643,9 @@ class PlexAPI {
         .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
         .join('&');
 
-      const extendedClient = this.plexClient as NodePlexAPI & {
-        putQuery?: (url: string) => Promise<void>;
-      };
-
       const editUrl = `/library/metadata/${collectionRatingKey}?${queryString}`;
 
-      await extendedClient.putQuery?.(editUrl);
+      await this.safePutQuery(editUrl);
     } catch (error) {
       logger.error(
         `Error updating sort title for collection ${collectionRatingKey}`,
@@ -663,22 +677,9 @@ class PlexAPI {
         );
       }
 
-      const extendedClient = this.plexClient as NodePlexAPI & {
-        putQuery?: (url: string) => Promise<void>;
-        postQuery?: (url: string) => Promise<unknown>;
-      };
-
-      if (!extendedClient.putQuery || !extendedClient.postQuery) {
-        logger.warn(
-          'Required HTTP methods not available on Plex client - cannot update visibility',
-          { label: 'Plex API' }
-        );
-        return;
-      }
-
       // Initialize hub for collection visibility management
       const hubInitUrl = `/hubs/sections/${librarySectionID}/manage?metadataItemId=${collectionRatingKey}`;
-      await extendedClient.postQuery(hubInitUrl);
+      await this.safePostQuery(hubInitUrl);
 
       // Update visibility settings
       const hubIdentifier = `custom.collection.${librarySectionID}.${collectionRatingKey}`;
@@ -689,7 +690,7 @@ class PlexAPI {
       });
 
       const putUrl = `/hubs/sections/${librarySectionID}/manage/${hubIdentifier}?${params.toString()}`;
-      await extendedClient.putQuery(putUrl);
+      await this.safePutQuery(putUrl);
 
       logger.info(
         `Updated collection ${collectionRatingKey} visibility: recommended=${recommended}, home=${home}, shared=${shared}`,
@@ -714,19 +715,7 @@ class PlexAPI {
 
   public async deleteCollection(collectionRatingKey: string): Promise<void> {
     try {
-      const extendedClient = this.plexClient as NodePlexAPI & {
-        deleteQuery?: (url: string) => Promise<void>;
-      };
-
-      if (typeof extendedClient.deleteQuery === 'function') {
-        await extendedClient.deleteQuery(
-          `/library/collections/${collectionRatingKey}`
-        );
-      } else {
-        await this.plexClient.query(
-          `/library/collections/${collectionRatingKey}`
-        );
-      }
+      await this.safeDeleteQuery(`/library/collections/${collectionRatingKey}`);
     } catch (error) {
       logger.error(`Error deleting collection ${collectionRatingKey}`, {
         label: 'Plex API',

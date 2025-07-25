@@ -2218,10 +2218,6 @@ paths:
                   error:
                     type: string
                     example: "Could not connect to Plex server"
-        '400':
-          description: Bad request
-        '500':
-          description: Server error
   /settings/tautulli:
     get:
       summary: Get Tautulli settings

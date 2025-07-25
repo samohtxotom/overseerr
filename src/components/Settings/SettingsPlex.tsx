@@ -153,6 +153,8 @@ const messages = defineMessages({
     'Collections disabled and purged successfully!',
   toastCollectionsSyncSkipped:
     'Plex collections sync skipped - collections are disabled. Enable collections in Plex settings to run this job.',
+  // Progress ETA messages
+  calculatingTimeRemaining: 'Calculating time remaining…',
 });
 
 interface Library {
@@ -1010,7 +1012,11 @@ const SettingsPlex = ({ onComplete }: SettingsPlexProps) => {
                 // Start collections sync job if collections are enabled
                 if (values.collectionsEnabled) {
                   setIsEnablingCollections(true);
-                  await runCollectionsSyncJob();
+                  try {
+                    await runCollectionsSyncJob();
+                  } finally {
+                    setIsEnablingCollections(false);
+                  }
                 } else {
                   addToast('Settings saved successfully!', {
                     autoDismiss: true,
@@ -1289,6 +1295,8 @@ const SettingsPlex = ({ onComplete }: SettingsPlexProps) => {
                   showEnablingState ||
                   isEnablingCollections ||
                   isDisablingCollections ||
+                  (collectionsStatus?.running &&
+                    collectionsStatus?.progress?.isManualOperation) ||
                   !data?.ip ||
                   !data?.port
                 );
@@ -1391,9 +1399,31 @@ const SettingsPlex = ({ onComplete }: SettingsPlexProps) => {
                                 />
                               </div>
                               <div className="mt-1 text-xs text-blue-300">
-                                {collectionsStatus?.progress?.currentStep ||
-                                  'Initializing collections...'}
+                                {collectionsStatus?.progress?.currentStep}
                               </div>
+                              {collectionsStatus?.progress?.eta &&
+                              collectionsStatus.progress.eta > 0 ? (
+                                <div className="mt-1 text-xs italic text-blue-400">
+                                  {(() => {
+                                    const totalSeconds = Math.ceil(
+                                      collectionsStatus.progress.eta / 1000
+                                    );
+                                    const minutes = Math.floor(
+                                      totalSeconds / 60
+                                    );
+                                    const seconds = totalSeconds % 60;
+                                    return minutes > 0
+                                      ? `~${minutes}m ${seconds}s remaining`
+                                      : `~${seconds}s remaining`;
+                                  })()}
+                                </div>
+                              ) : collectionsStatus?.running ? (
+                                <div className="mt-1 text-xs italic text-blue-400">
+                                  {intl.formatMessage(
+                                    messages.calculatingTimeRemaining
+                                  )}
+                                </div>
+                              ) : null}
                               {collectionsStatus?.progress?.details && (
                                 <div className="mt-2 text-xs text-blue-300">
                                   {collectionsStatus.progress.details
@@ -1460,9 +1490,31 @@ const SettingsPlex = ({ onComplete }: SettingsPlexProps) => {
                                 />
                               </div>
                               <div className="mt-1 text-xs text-orange-300">
-                                {collectionsStatus?.progress?.currentStep ||
-                                  'Purging collections...'}
+                                {collectionsStatus?.progress?.currentStep}
                               </div>
+                              {collectionsStatus?.progress?.eta &&
+                              collectionsStatus.progress.eta > 0 ? (
+                                <div className="mt-1 text-xs italic text-orange-400">
+                                  {(() => {
+                                    const totalSeconds = Math.ceil(
+                                      collectionsStatus.progress.eta / 1000
+                                    );
+                                    const minutes = Math.floor(
+                                      totalSeconds / 60
+                                    );
+                                    const seconds = totalSeconds % 60;
+                                    return minutes > 0
+                                      ? `~${minutes}m ${seconds}s remaining`
+                                      : `~${seconds}s remaining`;
+                                  })()}
+                                </div>
+                              ) : collectionsStatus?.running ? (
+                                <div className="mt-1 text-xs italic text-orange-400">
+                                  {intl.formatMessage(
+                                    messages.calculatingTimeRemaining
+                                  )}
+                                </div>
+                              ) : null}
                               {collectionsStatus?.progress?.details && (
                                 <div className="mt-2 text-xs text-orange-300">
                                   {collectionsStatus.progress.details
