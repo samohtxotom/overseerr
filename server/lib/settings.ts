@@ -37,6 +37,7 @@ export interface PlexSettings {
   collectionsEverEnabled?: boolean;
   collectionTemplate?: string;
   collectionVisibility?: 'none' | 'all' | 'admin' | 'shared';
+  globalCollectionEnabled?: boolean;
 }
 
 export interface TautulliSettings {
@@ -317,6 +318,7 @@ class Settings {
         collectionsEverEnabled: false,
         collectionTemplate: "{nickname}'s requests",
         collectionVisibility: 'none',
+        globalCollectionEnabled: false,
       },
       tautulli: {},
       radarr: [],

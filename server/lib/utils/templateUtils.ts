@@ -56,13 +56,6 @@ function extractDomain(url: string): string {
 }
 
 /**
- * Check if template contains at least one variable for uniqueness
- */
-export function hasValidVariable(template: string): boolean {
-  return /\{(user|username|nickname|domain|appTitle)\}/.test(template);
-}
-
-/**
  * Parse collection template with full variable replacement
  */
 export function parseCollectionTemplate(template: string, user: User): string {
@@ -84,4 +77,19 @@ export function parseCollectionTemplate(template: string, user: User): string {
     .trim();
 
   return result || `${getUserDisplayName(user)}'s requests`;
+}
+
+/**
+ * Generate global collection name with domain/appTitle fallback
+ */
+export function generateGlobalCollectionName(): string {
+  const settings = getSettings();
+  const domain = extractDomain(settings.main.applicationUrl || '');
+  const appTitle = settings.main.applicationTitle || 'Overseerr';
+
+  if (domain) {
+    return `${domain} requests by Everyone`;
+  }
+
+  return `${appTitle} requests by Everyone`;
 }

@@ -169,10 +169,15 @@ export async function createOrUpdateCollection(
   items: any[],
   mediaType: 'movie' | 'tv',
   plexClient: PlexAPI,
-  allCollections: any[]
+  allCollections: any[],
+  customTitle?: string,
+  customVisibility?: string,
+  isGlobalCollection?: boolean
 ): Promise<{ isNew: boolean; hasChanges: boolean }> {
-  const collectionTitle = generateCollectionTitle(user);
-  const labelName = `overseerr${user.plexId}`;
+  const collectionTitle = customTitle || generateCollectionTitle(user);
+  const labelName = isGlobalCollection
+    ? 'overseerrglobal'
+    : `overseerr${user.plexId}`;
 
   try {
     // Get library key
@@ -256,14 +261,25 @@ export async function createOrUpdateCollection(
             `!!${collectionTitle}`
           );
 
-          // Set collection visibility: admin collections visible on home, others hidden
-          const isAdminUser = user.id === 1;
-          await plexClient.updateCollectionVisibility(
-            collectionRatingKey,
-            false, // recommended
-            isAdminUser, // home - only visible for admin
-            false // shared
-          );
+          // Set collection visibility based on type
+          if (isGlobalCollection) {
+            // Global collections visible on both shared and home
+            await plexClient.updateCollectionVisibility(
+              collectionRatingKey,
+              false, // recommended
+              true, // home
+              true // shared
+            );
+          } else {
+            // Regular user collections: admin collections visible on home, others hidden
+            const isAdminUser = user.id === 1;
+            await plexClient.updateCollectionVisibility(
+              collectionRatingKey,
+              false, // recommended
+              isAdminUser, // home - only visible for admin
+              false // shared
+            );
+          }
 
           isNew = existingUserCollections.length === 0;
           hasChanges = true;
@@ -314,6 +330,11 @@ export async function cleanupOrphanedCollections(
 
       if (overseerrLabel) {
         const userPlexId = overseerrLabel.replace(/^overseerr/i, '');
+
+        // Skip global collections during cleanup
+        if (userPlexId === 'global') {
+          continue;
+        }
 
         // Only delete if this user has NO active requests
         if (!activeUserPlexIds.has(userPlexId)) {

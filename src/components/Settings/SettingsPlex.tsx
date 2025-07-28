@@ -25,22 +25,6 @@ import { useToasts } from 'react-toast-notifications';
 import useSWR from 'swr';
 import * as Yup from 'yup';
 
-interface FormikFieldProps {
-  field: {
-    name: string;
-    value: string;
-    onChange: (
-      e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
-    ) => void;
-    onBlur: (e: React.FocusEvent<HTMLInputElement | HTMLSelectElement>) => void;
-  };
-  form: {
-    setFieldValue: (field: string, value: string) => void;
-    errors: Record<string, string>;
-    touched: Record<string, boolean>;
-  };
-}
-
 const messages = defineMessages({
   plex: 'Plex',
   plexsettings: 'Plex Settings',
@@ -105,47 +89,23 @@ const messages = defineMessages({
     'Create Plex collections in the Library tab for each user with their available requests, only visible to the user. Note: Uses label restrictions, all collections will be visible to admin',
   plexcollections: 'Plex Collections',
   plexcollectionsDescription:
-    'Creates collections for each user in Plex under the Library tab with their available requests. Uses unique user labels with the overseerr prefix to restrict visibility to only that user and to ensure other collections and labels are unaffected. All collections will always be visible to the server owner. Runs as a job every 15 minutes.',
+    'Creates collections for each user in Plex under the Library tab with their available requests. All collections will always be visible to the server owner. Runs as a job every 6 hours.',
   enableCollections: 'Enable Collections',
   disableCollections: 'Disable Collections',
   verifyingPlexPass: 'Checking Plex Pass…',
   plexPassVerified: 'Plex Pass verified successfully!',
   overrideAndEnable: 'Override and Enable Collections',
-  collectionsManagement: 'Collections Management',
-  collectionsManagementDescription:
-    'Purges all collections and labels created by Overseerr',
-  plexPassRequired: 'Plex Pass Required',
+  plexPassRequired: 'WARNING: Your users privacy is at risk',
   plexPassRequiredDescription:
-    'Plex requires Plex Pass for labels to work. Without Plex Pass, all collections will be visible to all users. As collection titles contain usernames, this could be a privacy concern.',
+    'Collections titles can contain Usernames or Full Names, without Plex Pass, visibility cannot be restricted to only the applicable user.',
   collectionTemplate: 'Collection Name Template',
-  collectionTemplateDescription:
-    'Customize how collection names are generated. At least one variable is required to ensure each collection can be identified.',
   collectionTemplateHelp:
-    'Available variables: {username} (Plex username), {nickname} (display name), {domain} (your domain), {appTitle} (application title)',
+    'Available variables: {nickname} - Full Name, {username} - Plex Username, {domain} - Application URL, {appTitle} - Application Title',
   collectionTemplatePreview: 'Preview',
   collectionTemplatePresets: 'Presets',
   collectionTemplateCustom: 'Custom',
-  collectionTemplateUserRequired:
-    'At least one unique variable ({username} or {nickname}) is required for collection names',
-  collectionTemplateError:
-    'Collection template must include at least one unique variable ({username} or {nickname}) to ensure proper collection naming',
-  // Status and progress messages
   collectionsActive: '✓ Active',
   collectionsOverrideWarning: '(Override - visible to all users)',
-  enablingCollections: 'Enabling Collections',
-  disablingCollections: 'Disabling Collections',
-  // Progress step messages
-  progressEnablingCollections: 'Enabling collections…',
-  progressStartingSync: 'Starting collections sync job…',
-  progressCollectionsEnabled: 'Collections enabled successfully!',
-  progressDisablingCollections: 'Disabling collections…',
-  progressPurgingCollections: 'Purging existing collections…',
-  progressRemovingLabels: 'Removing user label restrictions…',
-  progressCollectionsDisabled: 'Collections disabled and purged!',
-  removingCollectionsAndLabels: 'Removing all overseerr collections and labels',
-  progressSavingSettings: 'Saving collection settings…',
-  progressSettingsSaved: 'Settings saved and sync started!',
-  // Toast messages
   toastCollectionsEnabled: 'Collections enabled successfully!',
   toastPlexPassVerified: 'Plex Pass verified successfully!',
   toastPlexPassNotDetected: 'Plex Pass not detected',
@@ -153,9 +113,10 @@ const messages = defineMessages({
   toastCollectionsDisabledSuccess:
     'Collections disabled and purged successfully!',
   toastCollectionsSyncSkipped:
-    'Plex collections sync skipped - collections are disabled. Enable collections in Plex settings to run this job.',
-  // Progress ETA messages
-  calculatingTimeRemaining: 'Calculating time remaining…',
+    'Collections disabled -  enable Collections in Plex Settings to run.',
+  globalCollectionEnabled: 'Create Global Collection',
+  globalCollectionEnabledDescription:
+    'Creates a single collection visible to all users containing all approved requests from everyone, sorted by request date.',
 });
 
 interface Library {
@@ -176,6 +137,22 @@ interface PlexPassStatus {
   hasPlexPass: boolean;
   message?: string;
   error?: string;
+}
+
+interface FormikFieldProps {
+  field: {
+    name: string;
+    value: string;
+    onChange: (
+      e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
+    ) => void;
+    onBlur: (e: React.FocusEvent<HTMLInputElement | HTMLSelectElement>) => void;
+  };
+  form: {
+    setFieldValue: (field: string, value: string) => void;
+    errors: Record<string, string>;
+    touched: Record<string, boolean>;
+  };
 }
 
 interface PresetServerDisplay {
@@ -1007,25 +984,10 @@ const SettingsPlex = ({ onComplete }: SettingsPlexProps) => {
               collectionsEnabled: data?.collectionsEnabled ?? false,
               collectionTemplate:
                 data?.collectionTemplate ?? "{nickname}'s requests",
+              globalCollectionEnabled: data?.globalCollectionEnabled ?? false,
             }}
             onSubmit={async (values) => {
               try {
-                // Validate that at least one unique field is present in custom templates
-                const hasUniqueVariable =
-                  values.collectionTemplate &&
-                  (values.collectionTemplate.includes('{username}') ||
-                    values.collectionTemplate.includes('{nickname}'));
-                if (values.collectionTemplate && !hasUniqueVariable) {
-                  addToast(
-                    intl.formatMessage(messages.collectionTemplateError),
-                    {
-                      autoDismiss: true,
-                      appearance: 'error',
-                    }
-                  );
-                  return;
-                }
-
                 // Save settings
                 await axios.post('/api/v1/settings/plex', {
                   ip: data?.ip,
@@ -1034,6 +996,7 @@ const SettingsPlex = ({ onComplete }: SettingsPlexProps) => {
                   webAppUrl: data?.webAppUrl,
                   collectionsEnabled: values.collectionsEnabled,
                   collectionTemplate: values.collectionTemplate,
+                  globalCollectionEnabled: values.globalCollectionEnabled,
                 } as PlexSettings);
 
                 // If collections are enabled, just update titles in background
@@ -1443,6 +1406,35 @@ const SettingsPlex = ({ onComplete }: SettingsPlexProps) => {
                       )}
 
                     <>
+                      {/* Global Collection Configuration */}
+                      <div className="form-row">
+                        <label
+                          htmlFor="globalCollectionEnabled"
+                          className="checkbox-label"
+                        >
+                          {intl.formatMessage(messages.globalCollectionEnabled)}
+                        </label>
+                        <div className="form-input-area">
+                          <Field
+                            type="checkbox"
+                            id="globalCollectionEnabled"
+                            name="globalCollectionEnabled"
+                            disabled={!values.collectionsEnabled}
+                            onChange={() => {
+                              setFieldValue(
+                                'globalCollectionEnabled',
+                                !values.globalCollectionEnabled
+                              );
+                            }}
+                          />
+                        </div>
+                        <p className="description">
+                          {intl.formatMessage(
+                            messages.globalCollectionEnabledDescription
+                          )}
+                        </p>
+                      </div>
+
                       {/* Collection Template Configuration */}
                       <div
                         className={`space-y-4 ${
@@ -1496,12 +1488,6 @@ const SettingsPlex = ({ onComplete }: SettingsPlexProps) => {
                                   : 'custom';
 
                                 const isCustom = dropdownValue === 'custom';
-                                const hasUniqueVariable =
-                                  field.value &&
-                                  (field.value.includes('{username}') ||
-                                    field.value.includes('{nickname}'));
-                                const showError =
-                                  isCustom && field.value && !hasUniqueVariable;
 
                                 return (
                                   <div className="space-y-3">
@@ -1547,19 +1533,8 @@ const SettingsPlex = ({ onComplete }: SettingsPlexProps) => {
                                             )
                                           }
                                           placeholder="Enter custom template..."
-                                          className={`rounded-md ${
-                                            showError ? 'border-red-500' : ''
-                                          }`}
+                                          className="rounded-md"
                                         />
-                                      </div>
-                                    )}
-
-                                    {/* Error message for missing {user} */}
-                                    {showError && (
-                                      <div className="text-sm text-red-400">
-                                        {intl.formatMessage(
-                                          messages.collectionTemplateError
-                                        )}
                                       </div>
                                     )}
 
@@ -1663,20 +1638,7 @@ const SettingsPlex = ({ onComplete }: SettingsPlexProps) => {
                                 buttonType="primary"
                                 buttonSize="sm"
                                 onClick={() => submitForm()}
-                                disabled={
-                                  !values.collectionsEnabled ||
-                                  Boolean(
-                                    values.collectionTemplate &&
-                                      !(
-                                        values.collectionTemplate.includes(
-                                          '{username}'
-                                        ) ||
-                                        values.collectionTemplate.includes(
-                                          '{nickname}'
-                                        )
-                                      )
-                                  )
-                                }
+                                disabled={!values.collectionsEnabled}
                                 data-testid="manual-collections-sync-button"
                               >
                                 <span>Save</span>

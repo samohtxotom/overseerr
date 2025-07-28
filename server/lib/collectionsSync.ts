@@ -14,6 +14,7 @@ import {
 import { getSettings } from '@server/lib/settings';
 import {
   extractErrorMessage,
+  generateGlobalCollectionName,
   getUserDisplayName,
 } from '@server/lib/utils/templateUtils';
 import logger from '@server/logger';
@@ -198,6 +199,14 @@ class CollectionsSync {
 
       if (this.cancelled) return;
 
+      // Create/update global collection if enabled
+      const globalCollectionStats = await this.processGlobalCollection(
+        requests,
+        plexClient,
+        allCollections
+      );
+      if (this.cancelled) return;
+
       // Clean up orphaned collections for users who no longer have requests
       const activeUserPlexIds = new Set(Object.keys(userCollections));
       const cleanupStats = await cleanupOrphanedCollections(
@@ -207,7 +216,17 @@ class CollectionsSync {
       if (this.cancelled) return;
 
       logger.info(
-        `Collections sync completed: ${userCount} users processed, ${collectionStats.created} created, ${collectionStats.updated} updated, ${cleanupStats.deleted} orphaned deleted`,
+        `Collections sync completed: ${userCount} users processed, ${
+          collectionStats.created + globalCollectionStats.created
+        } created, ${
+          collectionStats.updated + globalCollectionStats.updated
+        } updated, ${cleanupStats.deleted} orphaned deleted${
+          globalCollectionStats.created > 0 || globalCollectionStats.updated > 0
+            ? ` (${
+                globalCollectionStats.created + globalCollectionStats.updated
+              } global)`
+            : ''
+        }`,
         {
           label: 'Collections Sync',
         }
@@ -511,6 +530,131 @@ class CollectionsSync {
   }
 
   // COLLECTION MANAGEMENT (now handled by CollectionsManager)
+
+  /**
+   * Process global collection containing all users' requests
+   */
+  private async processGlobalCollection(
+    requests: MediaRequest[],
+    plexClient: PlexAPI,
+    allCollections: any[]
+  ): Promise<{ created: number; updated: number }> {
+    const settings = getSettings();
+
+    if (!settings.plex.globalCollectionEnabled) {
+      return { created: 0, updated: 0 };
+    }
+
+    const globalCollectionName = generateGlobalCollectionName();
+
+    // Organize all requests by media type (no user separation)
+    const movieItems: any[] = [];
+    const tvItems: any[] = [];
+
+    for (const request of requests) {
+      if (this.cancelled) break;
+
+      const ratingKey = request.is4k
+        ? request.media?.ratingKey4k
+        : request.media?.ratingKey;
+
+      if (!ratingKey) continue;
+
+      const collectionItem = {
+        ratingKey: ratingKey,
+        type: request.type,
+      };
+
+      if (request.type === 'movie') {
+        movieItems.push(collectionItem);
+      } else if (request.type === 'tv') {
+        tvItems.push(collectionItem);
+      }
+    }
+
+    let created = 0;
+    let updated = 0;
+
+    try {
+      // Create movie global collection if there are movie requests
+      if (movieItems.length > 0) {
+        // Create a fake user object for the global collection
+        const globalUser = {
+          id: 0,
+          plexId: null,
+          displayName: 'Everyone',
+          plexUsername: 'global',
+          plexTitle: 'Everyone',
+          username: 'global',
+          email: 'global@overseerr',
+        } as any;
+
+        const result = await createOrUpdateCollection(
+          globalUser,
+          movieItems,
+          'movie',
+          plexClient,
+          allCollections,
+          globalCollectionName,
+          'shared', // Set visibility to shared
+          true // isGlobalCollection
+        );
+
+        if (result.isNew) {
+          created++;
+        } else if (result.hasChanges) {
+          updated++;
+        }
+      }
+
+      // Create TV global collection if there are TV requests
+      if (tvItems.length > 0) {
+        const globalUser = {
+          id: 0,
+          plexId: null,
+          displayName: 'Everyone',
+          plexUsername: 'global',
+          plexTitle: 'Everyone',
+          username: 'global',
+          email: 'global@overseerr',
+        } as any;
+
+        const result = await createOrUpdateCollection(
+          globalUser,
+          tvItems,
+          'tv',
+          plexClient,
+          allCollections,
+          globalCollectionName,
+          'shared', // Set visibility to shared
+          true // isGlobalCollection
+        );
+
+        if (result.isNew) {
+          created++;
+        } else if (result.hasChanges) {
+          updated++;
+        }
+      }
+
+      if (created > 0 || updated > 0) {
+        logger.info(
+          `Global collection processing: ${created} created, ${updated} updated`,
+          {
+            label: 'Collections Sync',
+          }
+        );
+      }
+
+      return { created, updated };
+    } catch (error) {
+      logger.error(`Failed to process global collection: ${error}`, {
+        label: 'Collections Sync',
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+      return { created: 0, updated: 0 };
+    }
+  }
 
   // CLEANUP OPERATIONS
 
