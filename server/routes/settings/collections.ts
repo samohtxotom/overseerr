@@ -12,15 +12,20 @@ const collectionsRoutes = Router();
 
 /**
  * GET /api/v1/settings/plex/collections/sync
- * Get collections sync status (for progress polling)
+ * Get collections sync status (simplified - no detailed progress)
  */
 collectionsRoutes.get('/sync', (_req, res) => {
-  return res.status(200).json(collectionsSync.status);
+  return res.status(200).json({
+    running: collectionsSync.running,
+    message: collectionsSync.running
+      ? 'Collections sync in progress'
+      : 'Not running',
+  });
 });
 
 /**
  * POST /api/v1/settings/plex/collections/sync
- * Manually trigger a collection sync
+ * Start a collection sync in the background (fire-and-forget)
  */
 collectionsRoutes.post(
   '/sync',
@@ -57,7 +62,7 @@ collectionsRoutes.post(
         });
       }
 
-      // Initialize Plex client
+      // Initialize Plex client for quick connection test
       const plexClient = new PlexAPI({
         plexToken: admin.plexToken,
         plexSettings: settings.plex,
@@ -80,22 +85,28 @@ collectionsRoutes.post(
         );
       }
 
-      // Initialize collection service and sync (manual operation)
-      collectionsSync.run(true);
+      // Start collection sync in background with proper error handling
+      setImmediate(async () => {
+        try {
+          await collectionsSync.run();
+        } catch (error) {
+          logger.error('Background collections sync failed:', error);
+        }
+      });
 
-      logger.info('Manual Plex collections sync completed successfully');
+      logger.info('Manual Plex collections sync started in background');
 
       return res.status(200).json({
         status: 'success',
-        message: 'Collections sync completed successfully',
+        message: 'Collections sync started in background',
         hasPlexPass, // Include Plex Pass status in response
       });
     } catch (error) {
-      logger.error('Error during manual collections sync:', error);
+      logger.error('Error starting collections sync:', error);
 
       return res.status(500).json({
         status: 'error',
-        message: 'An error occurred during collections sync',
+        message: 'An error occurred while starting collections sync',
         error: error instanceof Error ? error.message : 'Unknown error',
       });
     }

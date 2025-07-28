@@ -1,0 +1,21 @@
+{
+  "running": true,
+  "cancelled": false,
+  "progress": {
+    "running": true,
+    "cancelled": false,
+    "currentStep": "Processing user collections",
+    "progress": 45,
+    "total": 100,
+    "isPurgeOperation": false,
+    "isManualOperation": true,
+    "eta": 120000,
+    "details": {
+      "usersProcessed": 2,
+      "totalUsers": 5,
+      "collectionsCreated": 3,
+      "collectionsUpdated": 1,
+      "collectionsDeleted": 0
+    }
+  }
+}

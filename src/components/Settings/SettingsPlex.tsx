@@ -142,6 +142,7 @@ const messages = defineMessages({
   progressPurgingCollections: 'Purging existing collections…',
   progressRemovingLabels: 'Removing user label restrictions…',
   progressCollectionsDisabled: 'Collections disabled and purged!',
+  removingCollectionsAndLabels: 'Removing all overseerr collections and labels',
   progressSavingSettings: 'Saving collection settings…',
   progressSettingsSaved: 'Settings saved and sync started!',
   // Toast messages
@@ -227,23 +228,51 @@ const SettingsPlex = ({ onComplete }: SettingsPlexProps) => {
     }
   );
 
-  // Collections sync status with continuous polling (like library scan)
-  const { data: collectionsStatus, mutate: revalidateCollections } = useSWR(
-    '/api/v1/settings/plex/collections/sync',
-    {
-      refreshInterval: 1000,
-    }
-  );
+  // No need for collections status polling anymore
   const intl = useIntl();
   const { addToast, removeToast } = useToasts();
 
-  // Helper function to run the collections sync job
-  const runCollectionsSyncJob = async () => {
+  // Helper function to start collections sync in background
+  const startCollectionsSync = async () => {
     try {
-      await axios.post('/api/v1/settings/plex/collections/sync');
-      revalidateCollections(); // Trigger immediate revalidation
+      const response = await axios.post(
+        '/api/v1/settings/plex/collections/sync'
+      );
+      addToast(
+        response.data.message || 'Collections sync started in background',
+        {
+          autoDismiss: true,
+          appearance: 'success',
+        }
+      );
     } catch (error) {
-      // Silently fail for secondary action
+      addToast('Failed to start collections sync', {
+        autoDismiss: true,
+        appearance: 'error',
+      });
+      throw error;
+    }
+  };
+
+  // Helper function to run full collections sync in background
+  const updateCollectionTitles = async () => {
+    try {
+      const response = await axios.post(
+        '/api/v1/settings/plex/collections/sync'
+      );
+      addToast(
+        response.data.message || 'Collections sync started in background',
+        {
+          autoDismiss: true,
+          appearance: 'success',
+        }
+      );
+    } catch (error) {
+      addToast('Failed to start collections sync', {
+        autoDismiss: true,
+        appearance: 'error',
+      });
+      throw error;
     }
   };
 
@@ -330,8 +359,6 @@ const SettingsPlex = ({ onComplete }: SettingsPlexProps) => {
                   webAppUrl: data.webAppUrl,
                   collectionsEnabled: true,
                 } as PlexSettings);
-                // Run collections sync job after successful enable
-                await runCollectionsSyncJob();
               }
 
               addToast(intl.formatMessage(messages.toastCollectionsEnabled), {
@@ -970,11 +997,11 @@ const SettingsPlex = ({ onComplete }: SettingsPlexProps) => {
           <h3 className="heading">
             {intl.formatMessage(messages.plexcollections)}
           </h3>
-          <p className="description">
+          <p className="description" data-testid="collections-sync-description">
             {intl.formatMessage(messages.plexcollectionsDescription)}
           </p>
         </div>
-        <div className="section">
+        <div className="section" data-testid="collections-sync-section">
           <Formik
             initialValues={{
               collectionsEnabled: data?.collectionsEnabled ?? false,
@@ -1009,14 +1036,17 @@ const SettingsPlex = ({ onComplete }: SettingsPlexProps) => {
                   collectionTemplate: values.collectionTemplate,
                 } as PlexSettings);
 
-                // Start collections sync job if collections are enabled
+                // If collections are enabled, just update titles in background
                 if (values.collectionsEnabled) {
-                  setIsEnablingCollections(true);
                   try {
-                    await runCollectionsSyncJob();
-                  } finally {
-                    setIsEnablingCollections(false);
+                    await updateCollectionTitles();
+                  } catch (error) {
+                    // Continue even if title update fails
                   }
+                  addToast('Settings saved successfully!', {
+                    autoDismiss: true,
+                    appearance: 'success',
+                  });
                 } else {
                   addToast('Settings saved successfully!', {
                     autoDismiss: true,
@@ -1026,29 +1056,17 @@ const SettingsPlex = ({ onComplete }: SettingsPlexProps) => {
 
                 revalidate();
               } catch (e) {
-                if (
-                  e instanceof Error &&
-                  e.message === 'Failed to start collections sync job'
-                ) {
-                  addToast(
-                    'Settings saved but failed to start collections sync job.',
-                    {
-                      autoDismiss: true,
-                      appearance: 'warning',
-                    }
-                  );
-                } else {
-                  addToast('Failed to save collections settings.', {
-                    autoDismiss: true,
-                    appearance: 'error',
-                  });
-                }
+                addToast('Failed to save collections settings.', {
+                  autoDismiss: true,
+                  appearance: 'error',
+                });
               }
             }}
           >
             {({ values, setFieldValue, submitForm }) => {
               const handleCollectionsAction = async () => {
                 if (values.collectionsEnabled) {
+                  // Disable collections and start purge in background
                   const newValue = false;
                   setFieldValue('collectionsEnabled', newValue);
 
@@ -1061,10 +1079,20 @@ const SettingsPlex = ({ onComplete }: SettingsPlexProps) => {
                       collectionsEnabled: newValue,
                     } as PlexSettings);
 
-                    addToast('Collections disabled successfully!', {
-                      autoDismiss: true,
-                      appearance: 'success',
-                    });
+                    // Start background purge sync
+                    try {
+                      await startCollectionsSync();
+                    } catch (error) {
+                      // Continue even if sync fails
+                    }
+
+                    addToast(
+                      'Collections disabled and cleanup started in background!',
+                      {
+                        autoDismiss: true,
+                        appearance: 'success',
+                      }
+                    );
                     revalidate();
                     // Reset states when disabling
                     setPlexPassStatus(null);
@@ -1115,9 +1143,8 @@ const SettingsPlex = ({ onComplete }: SettingsPlexProps) => {
                         webAppUrl: data?.webAppUrl,
                         collectionsEnabled: newValue,
                       } as PlexSettings);
-                      // Run collections sync job after successful enable
-                      await runCollectionsSyncJob();
 
+                      // Only enable setting, do not auto-start sync (matches Plex Pass verification behavior)
                       addToast(
                         intl.formatMessage(messages.toastCollectionsEnabled),
                         {
@@ -1152,11 +1179,16 @@ const SettingsPlex = ({ onComplete }: SettingsPlexProps) => {
                       webAppUrl: data?.webAppUrl,
                       collectionsEnabled: newValue,
                     } as PlexSettings);
-                    // Run collections sync job after successful enable
-                    await runCollectionsSyncJob();
+
+                    // Start initial collections sync in background
+                    try {
+                      await startCollectionsSync();
+                    } catch (error) {
+                      // Continue even if sync fails
+                    }
 
                     addToast(
-                      intl.formatMessage(messages.toastCollectionsEnabled),
+                      'Collections enabled and initial sync started in background!',
                       {
                         autoDismiss: true,
                         appearance: 'success',
@@ -1194,8 +1226,6 @@ const SettingsPlex = ({ onComplete }: SettingsPlexProps) => {
                       purgeUserLabels: true,
                     });
 
-                    revalidateCollections(); // Trigger immediate revalidation
-
                     addToast(
                       intl.formatMessage(
                         messages.toastCollectionsDisabledSuccess
@@ -1228,8 +1258,6 @@ const SettingsPlex = ({ onComplete }: SettingsPlexProps) => {
                       webAppUrl: data?.webAppUrl,
                       collectionsEnabled: newValue,
                     } as PlexSettings);
-                    // Run collections sync job after successful enable
-                    await runCollectionsSyncJob();
 
                     addToast(
                       intl.formatMessage(messages.toastCollectionsEnabled),
@@ -1252,6 +1280,11 @@ const SettingsPlex = ({ onComplete }: SettingsPlexProps) => {
               };
 
               const getButtonText = () => {
+                if (isDisablingCollections) {
+                  return intl.formatMessage(
+                    messages.removingCollectionsAndLabels
+                  );
+                }
                 if (values.collectionsEnabled) {
                   return intl.formatMessage(messages.disableCollections);
                 }
@@ -1295,8 +1328,6 @@ const SettingsPlex = ({ onComplete }: SettingsPlexProps) => {
                   showEnablingState ||
                   isEnablingCollections ||
                   isDisablingCollections ||
-                  (collectionsStatus?.running &&
-                    collectionsStatus?.progress?.isManualOperation) ||
                   !data?.ip ||
                   !data?.port
                 );
@@ -1309,7 +1340,7 @@ const SettingsPlex = ({ onComplete }: SettingsPlexProps) => {
 
               return (
                 <>
-                  <div className="space-y-6">
+                  <div className="space-y-6" data-testid="settings-plex-form">
                     {/* Collections Status */}
                     <div className="flex items-center justify-between">
                       <div className="flex items-center space-x-4">
@@ -1321,8 +1352,9 @@ const SettingsPlex = ({ onComplete }: SettingsPlexProps) => {
                               : handleCollectionsAction
                           }
                           disabled={isButtonDisabled()}
+                          data-testid="collections-sync-toggle"
                         >
-                          {isCheckingPlexPass && (
+                          {(isCheckingPlexPass || isDisablingCollections) && (
                             <ArrowPathIcon
                               className="animate-spin"
                               style={{ animationDirection: 'reverse' }}
@@ -1353,12 +1385,18 @@ const SettingsPlex = ({ onComplete }: SettingsPlexProps) => {
                         </Button>
 
                         {values.collectionsEnabled && (
-                          <span className="text-sm font-medium text-green-400">
+                          <span
+                            className="text-sm font-medium text-green-400"
+                            data-testid="collections-status-active"
+                          >
                             {intl.formatMessage(messages.collectionsActive)}
                             {isOverridden &&
                               plexPassStatus &&
                               !plexPassStatus.hasPlexPass && (
-                                <span className="ml-2 text-orange-400">
+                                <span
+                                  className="ml-2 text-orange-400"
+                                  data-testid="plex-pass-warning"
+                                >
                                   {intl.formatMessage(
                                     messages.collectionsOverrideWarning
                                   )}
@@ -1369,427 +1407,7 @@ const SettingsPlex = ({ onComplete }: SettingsPlexProps) => {
                       </div>
                     </div>
 
-                    {/* Blue progress bar for collections sync job (non-purge operations) */}
-                    {collectionsStatus?.running &&
-                      !collectionsStatus?.progress?.isPurgeOperation &&
-                      collectionsStatus?.progress?.isManualOperation && (
-                        <div className="rounded-md border border-blue-500/20 bg-blue-500/10 p-4">
-                          <div className="flex items-center space-x-3">
-                            <ArrowPathIcon
-                              className="h-5 w-5 animate-spin text-blue-400"
-                              style={{ animationDirection: 'reverse' }}
-                            />
-                            <div className="flex-1">
-                              <div className="flex items-center justify-between text-sm">
-                                <span className="font-medium text-blue-400">
-                                  Enabling Collections
-                                </span>
-                                <span className="text-blue-300">
-                                  {collectionsStatus?.progress?.progress || 0}%
-                                </span>
-                              </div>
-                              <div className="mt-2 h-2 w-full rounded-full bg-gray-700">
-                                <div
-                                  className="h-2 rounded-full bg-blue-400 transition-all duration-500 ease-out"
-                                  style={{
-                                    width: `${
-                                      collectionsStatus?.progress?.progress || 0
-                                    }%`,
-                                  }}
-                                />
-                              </div>
-                              <div className="mt-1 text-xs text-blue-300">
-                                {collectionsStatus?.progress?.currentStep}
-                              </div>
-                              {collectionsStatus?.progress?.eta &&
-                              collectionsStatus.progress.eta > 0 ? (
-                                <div className="mt-1 text-xs italic text-blue-400">
-                                  {(() => {
-                                    const totalSeconds = Math.ceil(
-                                      collectionsStatus.progress.eta / 1000
-                                    );
-                                    const minutes = Math.floor(
-                                      totalSeconds / 60
-                                    );
-                                    const seconds = totalSeconds % 60;
-                                    return minutes > 0
-                                      ? `~${minutes}m ${seconds}s remaining`
-                                      : `~${seconds}s remaining`;
-                                  })()}
-                                </div>
-                              ) : collectionsStatus?.running ? (
-                                <div className="mt-1 text-xs italic text-blue-400">
-                                  {intl.formatMessage(
-                                    messages.calculatingTimeRemaining
-                                  )}
-                                </div>
-                              ) : null}
-                              {collectionsStatus?.progress?.details && (
-                                <div className="mt-2 text-xs text-blue-300">
-                                  {collectionsStatus.progress.details
-                                    .totalUsers > 0 && (
-                                    <span>
-                                      Users:{' '}
-                                      {
-                                        collectionsStatus.progress.details
-                                          .usersProcessed
-                                      }
-                                      /
-                                      {
-                                        collectionsStatus.progress.details
-                                          .totalUsers
-                                      }
-                                      {' • '}
-                                      Created:{' '}
-                                      {
-                                        collectionsStatus.progress.details
-                                          .collectionsCreated
-                                      }
-                                      {' • '}
-                                      Updated:{' '}
-                                      {
-                                        collectionsStatus.progress.details
-                                          .collectionsUpdated
-                                      }
-                                    </span>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      )}
-
-                    {/* Orange progress bar for purge operations */}
-                    {collectionsStatus?.running &&
-                      collectionsStatus?.progress?.isPurgeOperation &&
-                      collectionsStatus?.progress?.isManualOperation && (
-                        <div className="rounded-md border border-orange-500/20 bg-orange-500/10 p-4">
-                          <div className="flex items-center space-x-3">
-                            <ArrowPathIcon
-                              className="h-5 w-5 animate-spin text-orange-400"
-                              style={{ animationDirection: 'reverse' }}
-                            />
-                            <div className="flex-1">
-                              <div className="flex items-center justify-between text-sm">
-                                <span className="font-medium text-orange-400">
-                                  Disabling Collections
-                                </span>
-                                <span className="text-orange-300">
-                                  {collectionsStatus?.progress?.progress || 0}%
-                                </span>
-                              </div>
-                              <div className="mt-2 h-2 w-full rounded-full bg-gray-700">
-                                <div
-                                  className="h-2 rounded-full bg-orange-400 transition-all duration-500 ease-out"
-                                  style={{
-                                    width: `${
-                                      collectionsStatus?.progress?.progress || 0
-                                    }%`,
-                                  }}
-                                />
-                              </div>
-                              <div className="mt-1 text-xs text-orange-300">
-                                {collectionsStatus?.progress?.currentStep}
-                              </div>
-                              {collectionsStatus?.progress?.eta &&
-                              collectionsStatus.progress.eta > 0 ? (
-                                <div className="mt-1 text-xs italic text-orange-400">
-                                  {(() => {
-                                    const totalSeconds = Math.ceil(
-                                      collectionsStatus.progress.eta / 1000
-                                    );
-                                    const minutes = Math.floor(
-                                      totalSeconds / 60
-                                    );
-                                    const seconds = totalSeconds % 60;
-                                    return minutes > 0
-                                      ? `~${minutes}m ${seconds}s remaining`
-                                      : `~${seconds}s remaining`;
-                                  })()}
-                                </div>
-                              ) : collectionsStatus?.running ? (
-                                <div className="mt-1 text-xs italic text-orange-400">
-                                  {intl.formatMessage(
-                                    messages.calculatingTimeRemaining
-                                  )}
-                                </div>
-                              ) : null}
-                              {collectionsStatus?.progress?.details && (
-                                <div className="mt-2 text-xs text-orange-300">
-                                  {collectionsStatus.progress.details
-                                    .collectionsDeleted > 0 && (
-                                    <span>
-                                      Deleted:{' '}
-                                      {
-                                        collectionsStatus.progress.details
-                                          .collectionsDeleted
-                                      }
-                                    </span>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      )}
-
-                    {/* Collection Template Configuration */}
-                    <div
-                      className={`space-y-4 ${
-                        !values.collectionsEnabled
-                          ? 'pointer-events-none opacity-50'
-                          : ''
-                      }`}
-                    >
-                      <div>
-                        <label
-                          htmlFor="collectionTemplate"
-                          className="text-label mb-2 block"
-                        >
-                          {intl.formatMessage(messages.collectionTemplate)}
-                        </label>
-                        <div>
-                          <Field name="collectionTemplate">
-                            {({ field, form }: FormikFieldProps) => {
-                              const presets = [
-                                {
-                                  label: "{nickname}'s requests",
-                                  value: "{nickname}'s requests",
-                                },
-                                {
-                                  label: 'Requested by {username}',
-                                  value: 'Requested by {username}',
-                                },
-                                {
-                                  label: "{domain} - {nickname}'s requests",
-                                  value: "{domain} - {nickname}'s requests",
-                                },
-                                {
-                                  label: '{domain} requests by {username}',
-                                  value: '{domain} requests by {username}',
-                                },
-                                {
-                                  label: '{appTitle} - {username} requests',
-                                  value: '{appTitle} - {username} requests',
-                                },
-                                { label: 'Custom', value: 'custom' },
-                              ];
-
-                              // Determine dropdown state
-                              const foundPreset = presets.find(
-                                (p) =>
-                                  p.value === field.value &&
-                                  p.value !== 'custom'
-                              );
-                              const dropdownValue = foundPreset
-                                ? field.value
-                                : 'custom';
-
-                              const isCustom = dropdownValue === 'custom';
-                              const hasUniqueVariable =
-                                field.value &&
-                                (field.value.includes('{username}') ||
-                                  field.value.includes('{nickname}'));
-                              const showError =
-                                isCustom && field.value && !hasUniqueVariable;
-
-                              return (
-                                <div className="space-y-3">
-                                  <div className="form-input-field">
-                                    <select
-                                      value={dropdownValue}
-                                      onChange={(e) => {
-                                        if (e.target.value !== 'custom') {
-                                          form.setFieldValue(
-                                            'collectionTemplate',
-                                            e.target.value
-                                          );
-                                        } else {
-                                          // When custom is selected, clear the field to trigger custom input
-                                          form.setFieldValue(
-                                            'collectionTemplate',
-                                            ''
-                                          );
-                                        }
-                                      }}
-                                      className="rounded-md"
-                                    >
-                                      {presets.map((preset) => (
-                                        <option
-                                          key={preset.value}
-                                          value={preset.value}
-                                        >
-                                          {preset.label}
-                                        </option>
-                                      ))}
-                                    </select>
-                                  </div>
-
-                                  {isCustom && (
-                                    <div className="form-input-field">
-                                      <input
-                                        type="text"
-                                        value={field.value}
-                                        onChange={(e) =>
-                                          form.setFieldValue(
-                                            'collectionTemplate',
-                                            e.target.value
-                                          )
-                                        }
-                                        placeholder="Enter custom template..."
-                                        className={`rounded-md ${
-                                          showError ? 'border-red-500' : ''
-                                        }`}
-                                      />
-                                    </div>
-                                  )}
-
-                                  {/* Error message for missing {user} */}
-                                  {showError && (
-                                    <div className="text-sm text-red-400">
-                                      {intl.formatMessage(
-                                        messages.collectionTemplateError
-                                      )}
-                                    </div>
-                                  )}
-
-                                  {/* Variables help - only show for custom - moved above preview */}
-                                  {isCustom && (
-                                    <div className="form-input-description">
-                                      <p className="text-xs text-gray-400">
-                                        {intl.formatMessage(
-                                          messages.collectionTemplateHelp
-                                        )}
-                                      </p>
-                                      <p className="mt-1 text-xs text-orange-400">
-                                        {intl.formatMessage(
-                                          messages.collectionTemplateUserRequired
-                                        )}
-                                      </p>
-                                    </div>
-                                  )}
-
-                                  {/* Live Preview - compact size */}
-                                  <div className="rounded border border-gray-600 bg-gray-900 px-2 py-1.5 text-sm">
-                                    <div className="mb-1 text-xs text-gray-400">
-                                      Preview:
-                                    </div>
-                                    <div className="text-sm text-gray-200">
-                                      {(() => {
-                                        try {
-                                          // Use real data for preview
-                                          const extractDomain = (
-                                            url?: string
-                                          ) => {
-                                            if (!url) return '';
-                                            try {
-                                              const urlWithProtocol =
-                                                url.startsWith('http')
-                                                  ? url
-                                                  : `https://${url}`;
-                                              return new URL(urlWithProtocol)
-                                                .hostname;
-                                            } catch {
-                                              return (
-                                                url
-                                                  .replace(/^https?:\/\//, '')
-                                                  .split('/')[0]
-                                                  .split(':')[0] || ''
-                                              );
-                                            }
-                                          };
-
-                                          const previewVars = {
-                                            username:
-                                              currentUser?.plexUsername ||
-                                              currentUser?.username ||
-                                              'username',
-                                            nickname:
-                                              currentUser?.plexTitle ||
-                                              currentUser?.displayName ||
-                                              'Nickname',
-                                            domain:
-                                              extractDomain(
-                                                mainSettings?.applicationUrl ||
-                                                  data?.webAppUrl
-                                              ) || 'yourdomain.com',
-                                            appTitle:
-                                              mainSettings?.applicationTitle ||
-                                              'Overseerr',
-                                          };
-
-                                          let preview =
-                                            field.value ||
-                                            "{nickname}'s requests";
-                                          Object.entries(previewVars).forEach(
-                                            ([key, value]) => {
-                                              preview = preview.replace(
-                                                new RegExp(`\\{${key}\\}`, 'g'),
-                                                value
-                                              );
-                                            }
-                                          );
-                                          return preview;
-                                        } catch {
-                                          return `Requested by ${
-                                            currentUser?.displayName ||
-                                            'Server Owner'
-                                          }`;
-                                        }
-                                      })()}
-                                    </div>
-                                  </div>
-                                </div>
-                              );
-                            }}
-                          </Field>
-
-                          {/* Save button for template */}
-                          <div className="mt-3">
-                            <Button
-                              buttonType="primary"
-                              buttonSize="sm"
-                              onClick={() => submitForm()}
-                              disabled={
-                                !values.collectionsEnabled ||
-                                (collectionsStatus?.running &&
-                                  collectionsStatus?.progress
-                                    ?.isManualOperation) ||
-                                Boolean(
-                                  values.collectionTemplate &&
-                                    !(
-                                      values.collectionTemplate.includes(
-                                        '{username}'
-                                      ) ||
-                                      values.collectionTemplate.includes(
-                                        '{nickname}'
-                                      )
-                                    )
-                                )
-                              }
-                            >
-                              {collectionsStatus?.running &&
-                                collectionsStatus?.progress
-                                  ?.isManualOperation && (
-                                  <ArrowPathIcon
-                                    className="animate-spin"
-                                    style={{ animationDirection: 'reverse' }}
-                                  />
-                                )}
-                              <span>
-                                {collectionsStatus?.running &&
-                                collectionsStatus?.progress?.isManualOperation
-                                  ? 'Running...'
-                                  : 'Save & Run'}
-                              </span>
-                            </Button>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Warning Messages */}
+                    {/* Plex Pass Warning - moved to immediately below the override button */}
                     {!values.collectionsEnabled &&
                       hasBeenChecked &&
                       plexPassStatus &&
@@ -1823,6 +1441,251 @@ const SettingsPlex = ({ onComplete }: SettingsPlexProps) => {
                           </div>
                         </div>
                       )}
+
+                    <>
+                      {/* Collection Template Configuration */}
+                      <div
+                        className={`space-y-4 ${
+                          !values.collectionsEnabled
+                            ? 'pointer-events-none opacity-50'
+                            : ''
+                        }`}
+                      >
+                        <div>
+                          <label
+                            htmlFor="collectionTemplate"
+                            className="text-label mb-2 block"
+                          >
+                            {intl.formatMessage(messages.collectionTemplate)}
+                          </label>
+                          <div>
+                            <Field name="collectionTemplate">
+                              {({ field, form }: FormikFieldProps) => {
+                                const presets = [
+                                  {
+                                    label: "{nickname}'s requests",
+                                    value: "{nickname}'s requests",
+                                  },
+                                  {
+                                    label: 'Requested by {username}',
+                                    value: 'Requested by {username}',
+                                  },
+                                  {
+                                    label: "{domain} - {nickname}'s requests",
+                                    value: "{domain} - {nickname}'s requests",
+                                  },
+                                  {
+                                    label: '{domain} requests by {username}',
+                                    value: '{domain} requests by {username}',
+                                  },
+                                  {
+                                    label: '{appTitle} - {username} requests',
+                                    value: '{appTitle} - {username} requests',
+                                  },
+                                  { label: 'Custom', value: 'custom' },
+                                ];
+
+                                // Determine dropdown state
+                                const foundPreset = presets.find(
+                                  (p) =>
+                                    p.value === field.value &&
+                                    p.value !== 'custom'
+                                );
+                                const dropdownValue = foundPreset
+                                  ? field.value
+                                  : 'custom';
+
+                                const isCustom = dropdownValue === 'custom';
+                                const hasUniqueVariable =
+                                  field.value &&
+                                  (field.value.includes('{username}') ||
+                                    field.value.includes('{nickname}'));
+                                const showError =
+                                  isCustom && field.value && !hasUniqueVariable;
+
+                                return (
+                                  <div className="space-y-3">
+                                    <div className="form-input-field">
+                                      <select
+                                        value={dropdownValue}
+                                        onChange={(e) => {
+                                          if (e.target.value !== 'custom') {
+                                            form.setFieldValue(
+                                              'collectionTemplate',
+                                              e.target.value
+                                            );
+                                          } else {
+                                            // When custom is selected, clear the field to trigger custom input
+                                            form.setFieldValue(
+                                              'collectionTemplate',
+                                              ''
+                                            );
+                                          }
+                                        }}
+                                        className="rounded-md"
+                                      >
+                                        {presets.map((preset) => (
+                                          <option
+                                            key={preset.value}
+                                            value={preset.value}
+                                          >
+                                            {preset.label}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    </div>
+
+                                    {isCustom && (
+                                      <div className="form-input-field">
+                                        <input
+                                          type="text"
+                                          value={field.value}
+                                          onChange={(e) =>
+                                            form.setFieldValue(
+                                              'collectionTemplate',
+                                              e.target.value
+                                            )
+                                          }
+                                          placeholder="Enter custom template..."
+                                          className={`rounded-md ${
+                                            showError ? 'border-red-500' : ''
+                                          }`}
+                                        />
+                                      </div>
+                                    )}
+
+                                    {/* Error message for missing {user} */}
+                                    {showError && (
+                                      <div className="text-sm text-red-400">
+                                        {intl.formatMessage(
+                                          messages.collectionTemplateError
+                                        )}
+                                      </div>
+                                    )}
+
+                                    {/* Variables help - only show for custom - moved above preview */}
+                                    {isCustom && (
+                                      <div className="form-input-description">
+                                        <p className="text-xs text-gray-400">
+                                          {intl.formatMessage(
+                                            messages.collectionTemplateHelp
+                                          )}
+                                        </p>
+                                        <p className="mt-1 text-xs text-orange-400">
+                                          {intl.formatMessage(
+                                            messages.collectionTemplateUserRequired
+                                          )}
+                                        </p>
+                                      </div>
+                                    )}
+
+                                    {/* Live Preview - compact size */}
+                                    <div className="rounded border border-gray-600 bg-gray-900 px-2 py-1.5 text-sm">
+                                      <div className="mb-1 text-xs text-gray-400">
+                                        Preview:
+                                      </div>
+                                      <div className="text-sm text-gray-200">
+                                        {(() => {
+                                          try {
+                                            // Use real data for preview
+                                            const extractDomain = (
+                                              url?: string
+                                            ) => {
+                                              if (!url) return '';
+                                              try {
+                                                const urlWithProtocol =
+                                                  url.startsWith('http')
+                                                    ? url
+                                                    : `https://${url}`;
+                                                return new URL(urlWithProtocol)
+                                                  .hostname;
+                                              } catch {
+                                                return (
+                                                  url
+                                                    .replace(/^https?:\/\//, '')
+                                                    .split('/')[0]
+                                                    .split(':')[0] || ''
+                                                );
+                                              }
+                                            };
+
+                                            const previewVars = {
+                                              username:
+                                                currentUser?.plexUsername ||
+                                                currentUser?.username ||
+                                                'username',
+                                              nickname:
+                                                currentUser?.plexTitle ||
+                                                currentUser?.displayName ||
+                                                'Nickname',
+                                              domain:
+                                                extractDomain(
+                                                  mainSettings?.applicationUrl ||
+                                                    data?.webAppUrl
+                                                ) || 'yourdomain.com',
+                                              appTitle:
+                                                mainSettings?.applicationTitle ||
+                                                'Overseerr',
+                                            };
+
+                                            let preview =
+                                              field.value ||
+                                              "{nickname}'s requests";
+                                            Object.entries(previewVars).forEach(
+                                              ([key, value]) => {
+                                                preview = preview.replace(
+                                                  new RegExp(
+                                                    `\\{${key}\\}`,
+                                                    'g'
+                                                  ),
+                                                  value
+                                                );
+                                              }
+                                            );
+                                            return preview;
+                                          } catch {
+                                            return `Requested by ${
+                                              currentUser?.displayName ||
+                                              'Server Owner'
+                                            }`;
+                                          }
+                                        })()}
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              }}
+                            </Field>
+
+                            {/* Save button for template */}
+                            <div className="mt-3">
+                              <Button
+                                buttonType="primary"
+                                buttonSize="sm"
+                                onClick={() => submitForm()}
+                                disabled={
+                                  !values.collectionsEnabled ||
+                                  Boolean(
+                                    values.collectionTemplate &&
+                                      !(
+                                        values.collectionTemplate.includes(
+                                          '{username}'
+                                        ) ||
+                                        values.collectionTemplate.includes(
+                                          '{nickname}'
+                                        )
+                                      )
+                                  )
+                                }
+                                data-testid="manual-collections-sync-button"
+                              >
+                                <span>Save</span>
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </>
                   </div>
                 </>
               );

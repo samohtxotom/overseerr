@@ -213,7 +213,7 @@ class PlexAPI {
       const response = await this.plexClient.query('/myplex/account');
       const account = response.MyPlex;
 
-      logger.info('Parsed account data:', {
+      logger.info('Parsed account data.', {
         label: 'Plex API',
         subscriptionActive: account?.subscriptionActive,
         subscriptionState: account?.subscriptionState,
@@ -235,7 +235,7 @@ class PlexAPI {
       return hasPlexPass;
     } catch (error) {
       logger.warn(
-        'Could not check Plex Pass status - assuming false for safety',
+        'Could not check Plex Pass status. Assuming false for safety.',
         {
           label: 'Plex API',
           error: error instanceof Error ? error.message : 'Unknown error',
@@ -280,7 +280,7 @@ class PlexAPI {
 
       settings.plex.libraries = newLibraries;
     } catch (e) {
-      logger.error('Failed to fetch Plex libraries', {
+      logger.error('Failed to fetch Plex libraries.', {
         label: 'Plex API',
         message: e.message,
       });
@@ -390,7 +390,7 @@ class PlexAPI {
         }
       }
     } catch (error) {
-      logger.error('Error getting all collections', {
+      logger.error('Error getting all collections.', {
         label: 'Plex API',
         error,
       });
@@ -440,25 +440,79 @@ class PlexAPI {
   public async getItemsByRatingKeys(
     ratingKeys: string[]
   ): Promise<PlexCollectionItem[]> {
-    const items: PlexCollectionItem[] = [];
-
-    for (const ratingKey of ratingKeys) {
-      try {
-        const response = await this.plexClient.query(
-          `/library/metadata/${ratingKey}`
-        );
-        if (response.MediaContainer?.Metadata?.[0]) {
-          items.push(response.MediaContainer.Metadata[0]);
-        }
-      } catch (error) {
-        logger.warn(`Failed to get item with rating key ${ratingKey}`, {
-          label: 'Plex API',
-          error,
-        });
-      }
+    if (ratingKeys.length === 0) {
+      return [];
     }
 
-    return items;
+    try {
+      // Use bulk fetching with comma-separated rating keys (like Python PlexAPI)
+      const ratingKeysParam = ratingKeys.join(',');
+      const response = await this.plexClient.query(
+        `/library/metadata/${ratingKeysParam}`
+      );
+
+      const items = response.MediaContainer?.Metadata || [];
+
+      if (items.length < ratingKeys.length) {
+        const missingCount = ratingKeys.length - items.length;
+        logger.warn(
+          `${missingCount}/${ratingKeys.length} items could not be found in Plex library.`,
+          {
+            label: 'Plex API',
+            totalRequested: ratingKeys.length,
+            totalFound: items.length,
+          }
+        );
+      }
+
+      // CRITICAL: Preserve the original order from ratingKeys array
+      // Plex returns items in alphabetical order, but we need chronological request order
+      const orderedItems: PlexCollectionItem[] = [];
+      for (const ratingKey of ratingKeys) {
+        const item = items.find((item: any) => item.ratingKey === ratingKey);
+        if (item) {
+          orderedItems.push(item);
+        }
+      }
+
+      return orderedItems;
+    } catch (error) {
+      // If bulk fetch fails, fall back to individual requests
+      logger.warn('Bulk fetch failed, falling back to individual requests.', {
+        label: 'Plex API',
+      });
+
+      const items: PlexCollectionItem[] = [];
+      let failedCount = 0;
+
+      for (const ratingKey of ratingKeys) {
+        try {
+          const response = await this.plexClient.query(
+            `/library/metadata/${ratingKey}`
+          );
+          if (response.MediaContainer?.Metadata?.[0]) {
+            items.push(response.MediaContainer.Metadata[0]);
+          } else {
+            failedCount++;
+          }
+        } catch {
+          failedCount++;
+        }
+      }
+
+      if (failedCount > 0) {
+        logger.warn(
+          `${failedCount}/${ratingKeys.length} items could not be found in Plex library.`,
+          {
+            label: 'Plex API',
+            totalRequested: ratingKeys.length,
+            totalFound: items.length,
+          }
+        );
+      }
+
+      return items;
+    }
   }
 
   public async getCollectionByName(
@@ -501,10 +555,13 @@ class PlexAPI {
 
   public async createEmptyCollection(
     title: string,
-    libraryKey: string
+    libraryKey: string,
+    mediaType: 'movie' | 'tv' = 'movie'
   ): Promise<string | null> {
     try {
-      const createUrl = `/library/collections?type=1&title=${encodeURIComponent(
+      // Use correct type parameter: 1 for movies, 2 for TV shows
+      const typeParam = mediaType === 'tv' ? 2 : 1;
+      const createUrl = `/library/collections?type=${typeParam}&title=${encodeURIComponent(
         title
       )}&smart=0&sectionId=${libraryKey}`;
 
@@ -530,24 +587,136 @@ class PlexAPI {
     }
   }
 
+  public async createCollectionWithItems(
+    title: string,
+    libraryKey: string,
+    items: PlexCollectionItem[],
+    mediaType: 'movie' | 'tv' = 'movie'
+  ): Promise<string | null> {
+    try {
+      if (items.length === 0) {
+        return this.createEmptyCollection(title, libraryKey, mediaType);
+      }
+
+      // Use Python PlexAPI approach: create collection with items in single call
+      const typeParam = mediaType === 'tv' ? 2 : 1;
+      const machineId = getSettings().plex.machineId;
+      const ratingKeys = items.map((item) => item.ratingKey).join(',');
+      const uri = `server://${machineId}/com.plexapp.plugins.library/library/metadata/${ratingKeys}`;
+
+      const createUrl = `/library/collections?type=${typeParam}&title=${encodeURIComponent(
+        title
+      )}&smart=0&sectionId=${libraryKey}&uri=${encodeURIComponent(uri)}`;
+
+      const result = await this.safePostQuery(createUrl);
+
+      let collectionRatingKey: string | null = null;
+      if (result && typeof result === 'object' && 'MediaContainer' in result) {
+        const resultObj = result as {
+          MediaContainer?: { Metadata?: PlexCollection[] };
+        };
+        if (resultObj.MediaContainer?.Metadata?.[0]) {
+          collectionRatingKey = resultObj.MediaContainer.Metadata[0].ratingKey;
+        }
+      }
+
+      return collectionRatingKey;
+    } catch (error) {
+      logger.warn(
+        'Bulk collection creation failed, falling back to empty collection.',
+        {
+          label: 'Plex API',
+        }
+      );
+
+      // Fall back to empty collection + individual item addition
+      const collectionRatingKey = await this.createEmptyCollection(
+        title,
+        libraryKey,
+        mediaType
+      );
+      if (collectionRatingKey && items.length > 0) {
+        await this.addItemsToCollection(collectionRatingKey, items);
+      }
+      return collectionRatingKey;
+    }
+  }
+
   public async addItemsToCollection(
     collectionRatingKey: string,
     items: PlexCollectionItem[]
   ): Promise<void> {
+    if (items.length === 0) {
+      return;
+    }
+
     const machineId = getSettings().plex.machineId;
 
-    for (const item of items) {
-      try {
-        const uriParam = `server://${machineId}/com.plexapp.plugins.library/library/metadata/${item.ratingKey}`;
-        const addUrl = `/library/collections/${collectionRatingKey}/items?uri=${uriParam}`;
+    try {
+      // Use bulk addition with comma-separated rating keys
+      const ratingKeys = items.map((item) => item.ratingKey).join(',');
+      const uriParam = `server://${machineId}/com.plexapp.plugins.library/library/metadata/${ratingKeys}`;
+      const addUrl = `/library/collections/${collectionRatingKey}/items?uri=${encodeURIComponent(
+        uriParam
+      )}`;
 
-        await this.safePutQuery(addUrl);
-      } catch (error) {
-        logger.warn(`Failed to add item ${item.ratingKey} to collection`, {
+      await this.safePutQuery(addUrl);
+    } catch (error) {
+      // If bulk addition fails, fall back to individual addition
+      logger.warn(
+        'Bulk item addition failed, falling back to individual addition.',
+        {
+          label: 'Plex API',
+          collectionRatingKey,
+        }
+      );
+
+      for (const item of items) {
+        try {
+          const uriParam = `server://${machineId}/com.plexapp.plugins.library/library/metadata/${item.ratingKey}`;
+          const addUrl = `/library/collections/${collectionRatingKey}/items?uri=${encodeURIComponent(
+            uriParam
+          )}`;
+
+          await this.safePutQuery(addUrl);
+        } catch (itemError) {
+          const errorMessage =
+            itemError instanceof Error ? itemError.message : 'Unknown error';
+          logger.warn(
+            `Failed to add item "${item.title || 'Unknown'}" to collection.`,
+            {
+              label: 'Plex API',
+              itemRatingKey: item.ratingKey,
+              collectionRatingKey,
+              error: errorMessage,
+            }
+          );
+        }
+      }
+    }
+  }
+
+  /**
+   * Get items in a collection
+   */
+  public async getCollectionItems(
+    collectionRatingKey: string
+  ): Promise<string[]> {
+    try {
+      const response = await this.plexClient.query(
+        `/library/collections/${collectionRatingKey}/children`
+      );
+      const items = response.MediaContainer?.Metadata || [];
+      return items.map((item: PlexCollectionItem) => item.ratingKey);
+    } catch (error) {
+      logger.error(
+        `Error getting items from collection ${collectionRatingKey}`,
+        {
           label: 'Plex API',
           error,
-        });
-      }
+        }
+      );
+      return [];
     }
   }
 
@@ -599,12 +768,37 @@ class PlexAPI {
     label: string
   ): Promise<boolean> {
     try {
-      const params = {
+      // Get current collection metadata to preserve existing labels
+      const collectionMeta = await this.getCollectionMetadata(
+        collectionRatingKey
+      );
+      if (!collectionMeta) {
+        throw new Error(
+          `Could not get metadata for collection ${collectionRatingKey}`
+        );
+      }
+
+      // Clean existing Overseerr labels while preserving user's custom labels
+      const { cleanOverseerrCollectionLabels } = await import(
+        '@server/lib/collectionsUtils'
+      );
+      const existingLabels = collectionMeta.labels || [];
+      const preservedLabels = cleanOverseerrCollectionLabels(existingLabels);
+
+      // Combine preserved labels with new Overseerr label
+      const allLabels = [...preservedLabels, label];
+
+      // Build params with all labels to preserve existing ones
+      const params: Record<string, string | number> = {
         type: 18,
         id: collectionRatingKey,
-        'label[].tag.tag': label,
         'label.locked': 1,
       };
+
+      // Add each label as a separate parameter
+      allLabels.forEach((labelTag, index) => {
+        params[`label[${index}].tag.tag`] = labelTag;
+      });
 
       const queryString = Object.entries(params)
         .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
@@ -624,6 +818,36 @@ class PlexAPI {
         }
       );
       return false;
+    }
+  }
+
+  public async updateCollectionTitle(
+    collectionRatingKey: string,
+    title: string
+  ): Promise<void> {
+    try {
+      const params = {
+        type: 18,
+        id: collectionRatingKey,
+        'title.value': title,
+        'title.locked': 1,
+      };
+
+      const queryString = Object.entries(params)
+        .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
+        .join('&');
+
+      const editUrl = `/library/metadata/${collectionRatingKey}?${queryString}`;
+
+      await this.safePutQuery(editUrl);
+    } catch (error) {
+      logger.error(
+        `Error updating title for collection ${collectionRatingKey}`,
+        {
+          label: 'Plex API',
+          error,
+        }
+      );
     }
   }
 
@@ -652,6 +876,90 @@ class PlexAPI {
         {
           label: 'Plex API',
           error,
+        }
+      );
+    }
+  }
+
+  public async updateCollectionContentSort(
+    collectionRatingKey: string,
+    sortType: 'release' | 'alpha' | 'custom' = 'custom'
+  ): Promise<void> {
+    try {
+      // Map sort types to Plex integer values (from Python PlexAPI reverse engineering)
+      const sortValues = {
+        release: 0, // Order by release dates
+        alpha: 1, // Order alphabetically
+        custom: 2, // Custom collection order (preserves add order)
+      };
+
+      // Use the correct endpoint discovered from Python PlexAPI debug output:
+      // PUT /library/collections/{ratingKey}/prefs?collectionSort=2
+      const editUrl = `/library/collections/${collectionRatingKey}/prefs?collectionSort=${sortValues[sortType]}`;
+
+      await this.safePutQuery(editUrl);
+    } catch (error) {
+      logger.error(
+        `Error updating content sort for collection ${collectionRatingKey}`,
+        {
+          label: 'Plex API',
+          error,
+        }
+      );
+      throw error;
+    }
+  }
+
+  public async moveItemInCollection(
+    collectionRatingKey: string,
+    itemRatingKey: string,
+    afterItemRatingKey: string
+  ): Promise<boolean> {
+    try {
+      // Use the exact API endpoint discovered from Python PlexAPI debug output:
+      // PUT /library/collections/{collectionRatingKey}/items/{itemRatingKey}/move?after={afterItemRatingKey}
+      const moveUrl = `/library/collections/${collectionRatingKey}/items/${itemRatingKey}/move?after=${afterItemRatingKey}`;
+
+      await this.safePutQuery(moveUrl);
+      return true;
+    } catch (error) {
+      // Silently fail - this is not critical for functionality
+      return false;
+    }
+  }
+
+  public async arrangeCollectionItemsInOrder(
+    collectionRatingKey: string,
+    orderedItems: PlexCollectionItem[]
+  ): Promise<void> {
+    if (orderedItems.length <= 1) {
+      return; // No need to arrange single item or empty collections
+    }
+
+    let failCount = 0;
+
+    // Move each item to its correct position (skip the first item as it's already in position)
+    // Items are ordered newest first, so we position each subsequent item after the previous one
+    for (let i = 1; i < orderedItems.length; i++) {
+      const currentItem = orderedItems[i];
+      const previousItem = orderedItems[i - 1];
+
+      const success = await this.moveItemInCollection(
+        collectionRatingKey,
+        currentItem.ratingKey,
+        previousItem.ratingKey
+      );
+
+      if (!success) {
+        failCount++;
+      }
+    }
+
+    if (failCount > 0) {
+      logger.warn(
+        `Failed to arrange ${failCount} items in collection ${collectionRatingKey}`,
+        {
+          label: 'Plex API',
         }
       );
     }
@@ -691,13 +999,6 @@ class PlexAPI {
 
       const putUrl = `/hubs/sections/${librarySectionID}/manage/${hubIdentifier}?${params.toString()}`;
       await this.safePutQuery(putUrl);
-
-      logger.info(
-        `Updated collection ${collectionRatingKey} visibility: recommended=${recommended}, home=${home}, shared=${shared}`,
-        {
-          label: 'Plex API',
-        }
-      );
     } catch (error) {
       logger.error(
         `Error updating visibility for collection ${collectionRatingKey}`,
@@ -713,11 +1014,90 @@ class PlexAPI {
     }
   }
 
+  /**
+   * Remove specific items from a collection (incremental update)
+   */
+  public async removeSpecificItemsFromCollection(
+    collectionRatingKey: string,
+    itemsToRemove: string[]
+  ): Promise<{ successful: number; failed: number }> {
+    let successful = 0;
+    let failed = 0;
+
+    for (const ratingKey of itemsToRemove) {
+      const removeUrl = `/library/collections/${collectionRatingKey}/items/${ratingKey}`;
+
+      try {
+        await this.safeDeleteQuery(removeUrl);
+        successful++;
+      } catch (error) {
+        failed++;
+        const errorMessage = (error as Error).message;
+        if (!errorMessage.includes('404')) {
+          logger.warn(
+            `Failed to remove item ${ratingKey} from collection ${collectionRatingKey}`,
+            {
+              label: 'Plex API',
+              error: errorMessage,
+            }
+          );
+        }
+      }
+    }
+
+    return { successful, failed };
+  }
+
+  /**
+   * Add specific items to a collection (incremental update)
+   */
+  public async addSpecificItemsToCollection(
+    collectionRatingKey: string,
+    itemsToAdd: string[]
+  ): Promise<{ successful: number; failed: number }> {
+    let successful = 0;
+    let failed = 0;
+
+    // Add items in batches to avoid overwhelming the API
+    const batchSize = 20;
+    const machineId = getSettings().plex.machineId;
+
+    for (let i = 0; i < itemsToAdd.length; i += batchSize) {
+      const batch = itemsToAdd.slice(i, i + batchSize);
+      const uri = batch
+        .map(
+          (key) =>
+            `server://${machineId}/com.plexapp.plugins.library/library/metadata/${key}`
+        )
+        .join(',');
+
+      try {
+        await this.safePutQuery(
+          `/library/collections/${collectionRatingKey}/items?uri=${encodeURIComponent(
+            uri
+          )}`
+        );
+        successful += batch.length;
+      } catch (error) {
+        failed += batch.length;
+        logger.error(
+          `Error adding batch of ${batch.length} items to collection ${collectionRatingKey}`,
+          {
+            label: 'Plex API',
+            error,
+          }
+        );
+      }
+    }
+
+    return { successful, failed };
+  }
+
   public async deleteCollection(collectionRatingKey: string): Promise<void> {
     try {
       await this.safeDeleteQuery(`/library/collections/${collectionRatingKey}`);
     } catch (error) {
-      logger.error(`Error deleting collection ${collectionRatingKey}`, {
+      logger.error(`Error deleting collection ${collectionRatingKey}.`, {
         label: 'Plex API',
         error,
       });

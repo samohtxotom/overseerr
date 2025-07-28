@@ -118,19 +118,8 @@ settingsRoutes.post('/plex', async (req, res, next) => {
       settings.plex.collectionsEverEnabled = true;
     }
 
-    // Auto-trigger collections sync when collections are enabled
-    const shouldRunCollectionsSync =
-      !wasCollectionsEnabled && willBeCollectionsEnabled;
-
-    if (shouldRunCollectionsSync) {
-      logger.info('Auto-sync trigger detected', {
-        label: 'Settings API',
-        wasCollectionsEnabled,
-        willBeCollectionsEnabled,
-        reason:
-          'Collections being enabled for first time or after being disabled',
-      });
-    }
+    // Note: Collections sync is now handled by scheduled job (every 15 minutes)
+    // or manual "Save & Run" button - no auto-trigger on enable
 
     const plexClient = new PlexAPI({ plexToken: admin.plexToken });
 
@@ -165,20 +154,19 @@ settingsRoutes.post('/plex', async (req, res, next) => {
       }
     }
 
-    // Handle purge operations - use combined purge when both are requested
+    // Handle purge operations - when disabling collections
     let purgeResult = null;
-    if (req.body.purgeCollections && req.body.purgeUserLabels) {
-      // Combined purge operation with unified progress tracking
+    if (req.body.purgeCollections || req.body.purgeUserLabels) {
       try {
-        purgeResult = await collectionsSync.purgeAllData(true);
+        purgeResult = await collectionsSync.purgeAllData();
         logger.info(
-          `Combined purge completed: ${purgeResult.collectionsDeleted} collections deleted, ${purgeResult.usersProcessed} users processed (${purgeResult.labelsSuccessful} successful, ${purgeResult.labelsFailed} failed)`,
+          `Purge completed: ${purgeResult.collectionsDeleted} collections deleted, ${purgeResult.usersProcessed} users processed (${purgeResult.labelsSuccessful} successful, ${purgeResult.labelsFailed} failed)`,
           {
             label: 'Settings API',
           }
         );
       } catch (error) {
-        logger.error('Error in combined purge operation', {
+        logger.error('Error in purge operation', {
           label: 'Settings API',
           error: error instanceof Error ? error.message : 'Unknown error',
         });
@@ -188,76 +176,13 @@ settingsRoutes.post('/plex', async (req, res, next) => {
           }`
         );
       }
-    } else {
-      // Individual purge operations (fallback for separate requests)
-      if (req.body.purgeCollections) {
-        try {
-          purgeResult = await collectionsSync.purgeAllCollections(true);
-          logger.info(`Purged ${purgeResult.deleted} Overseerr collections`, {
-            label: 'Settings API',
-          });
-        } catch (error) {
-          logger.error('Error purging collections', {
-            label: 'Settings API',
-            error: error instanceof Error ? error.message : 'Unknown error',
-          });
-          throw new Error(
-            `Failed to purge collections: ${
-              error instanceof Error ? error.message : 'Unknown error'
-            }`
-          );
-        }
-      }
-
-      if (req.body.purgeUserLabels) {
-        try {
-          const labelsPurgeResult = await collectionsSync.purgeUserLabels(true);
-          logger.info(
-            `Purged user label restrictions: ${labelsPurgeResult.successful} successful, ${labelsPurgeResult.failed} failed`,
-            {
-              label: 'Settings API',
-            }
-          );
-        } catch (error) {
-          logger.error('Error purging user labels', {
-            label: 'Settings API',
-            error: error instanceof Error ? error.message : 'Unknown error',
-          });
-          throw new Error(
-            `Failed to purge user labels: ${
-              error instanceof Error ? error.message : 'Unknown error'
-            }`
-          );
-        }
-      }
     }
 
     settings.save();
 
-    // Auto-trigger collections sync when collections are enabled
-    if (shouldRunCollectionsSync) {
-      try {
-        logger.info(
-          'Auto-triggering collections sync after enabling collections',
-          {
-            label: 'Settings API',
-          }
-        );
-
-        // Don't await - let it run in background like purge operations (manual operation)
-        collectionsSync.run(true);
-
-        logger.info('Collections sync started successfully after enable', {
-          label: 'Settings API',
-        });
-      } catch (error) {
-        logger.error('Error auto-starting collections sync', {
-          label: 'Settings API',
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-        // Don't throw - this is a secondary action
-      }
-    }
+    // Collections sync now only triggered by:
+    // 1. Scheduled job (every 15 minutes) when collections are enabled
+    // 2. Manual "Save & Run" button in UI
 
     // Include Plex Pass status if checked and purge results
     const response = {
