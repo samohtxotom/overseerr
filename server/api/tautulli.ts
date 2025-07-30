@@ -113,6 +113,30 @@ interface TautulliInfoResponse {
   };
 }
 
+interface TautulliHomeStatRow {
+  rating_key: string;
+  title: string;
+  total_plays: number;
+  media_type: string;
+  grandparent_rating_key?: string;
+  grandparent_title?: string;
+  plays?: number;
+}
+
+interface TautulliHomeStat {
+  stat_id: string;
+  stat_type?: string;
+  rows: TautulliHomeStatRow[];
+}
+
+interface TautulliHomeStatsResponse {
+  response: {
+    result: string;
+    message?: string;
+    data: TautulliHomeStat[];
+  };
+}
+
 class TautulliAPI {
   private axios: AxiosInstance;
 
@@ -288,6 +312,176 @@ class TautulliAPI {
         `[Tautulli] Failed to fetch user watch history: ${e.message}`
       );
     }
+  }
+
+  public async getHomeStats(
+    timeRange = 30,
+    statsType: 'plays' | 'duration' = 'plays',
+    statId = 'top_movies',
+    statsCount = 20,
+    statsStart = 0
+  ): Promise<TautulliHomeStatRow[]> {
+    try {
+      const response = await this.axios.get<TautulliHomeStatsResponse>(
+        '/api/v2',
+        {
+          params: {
+            cmd: 'get_home_stats',
+            time_range: timeRange,
+            stats_type: statsType,
+            stat_id: statId,
+            stats_count: statsCount,
+            stats_start: statsStart,
+          },
+        }
+      );
+
+      const data = response.data.response.data;
+
+      // When requesting a specific stat_id, Tautulli returns the stat object directly
+      if (
+        data &&
+        typeof data === 'object' &&
+        'stat_id' in data &&
+        data.stat_id === statId
+      ) {
+        const statObject = data as unknown as TautulliHomeStat;
+        return statObject.rows || [];
+      }
+
+      // Handle array format (when no specific stat_id is requested)
+      if (Array.isArray(data) && data.length > 0) {
+        // Handle the correct response structure
+        if (data[0] && 'stat_id' in data[0]) {
+          const statObject = data.find((stat) => stat.stat_id === statId);
+          logger.info('Found stat object in array', {
+            label: 'Tautulli API',
+            statId,
+            foundObject: !!statObject,
+            rowsCount: statObject ? statObject.rows.length : 0,
+            rows: statObject ? statObject.rows.slice(0, 3) : [],
+          });
+          return statObject ? statObject.rows : [];
+        }
+
+        // Fallback for backward compatibility - if data is already an array of rows
+        logger.info('Using fallback data structure', {
+          label: 'Tautulli API',
+          dataLength: data.length,
+          firstFewItems: data.slice(0, 3),
+        });
+        return data as unknown as TautulliHomeStatRow[];
+      }
+
+      logger.warn('No data returned from Tautulli', {
+        label: 'Tautulli API',
+        statId,
+        timeRange,
+        statsType,
+      });
+
+      return [];
+    } catch (e) {
+      logger.error('Something went wrong fetching home stats from Tautulli', {
+        label: 'Tautulli API',
+        errorMessage: e.message,
+        timeRange,
+        statsType,
+        statId,
+        statsCount,
+        statsStart,
+      });
+      throw new Error(`[Tautulli] Failed to fetch home stats: ${e.message}`);
+    }
+  }
+
+  public async getLibraryWatchTimeStats(
+    sectionId: string,
+    queryDays = '7,30'
+  ): Promise<any[]> {
+    try {
+      return (
+        await this.axios.get('/api/v2', {
+          params: {
+            cmd: 'get_library_watch_time_stats',
+            section_id: sectionId,
+            query_days: queryDays,
+          },
+        })
+      ).data.response.data;
+    } catch (e) {
+      logger.error(
+        'Something went wrong fetching library watch time stats from Tautulli',
+        {
+          label: 'Tautulli API',
+          errorMessage: e.message,
+          sectionId,
+          queryDays,
+        }
+      );
+      throw new Error(
+        `[Tautulli] Failed to fetch library watch time stats: ${e.message}`
+      );
+    }
+  }
+
+  public async getContent(
+    mediaType: 'movie' | 'tv',
+    timeRangeDays = 30,
+    statType: 'plays' | 'duration' = 'plays',
+    collectionType: 'most_popular' | 'most_watched' = 'most_popular',
+    limit = 20
+  ): Promise<TautulliHomeStatRow[]> {
+    try {
+      // Determine the correct stat ID based on media type and collection type
+      let statId: string;
+      if (collectionType === 'most_popular') {
+        statId = mediaType === 'movie' ? 'popular_movies' : 'popular_tv';
+      } else {
+        // most_watched
+        statId = mediaType === 'movie' ? 'top_movies' : 'top_tv';
+      }
+
+      const stats = await this.getHomeStats(
+        timeRangeDays,
+        statType,
+        statId,
+        limit,
+        0
+      );
+
+      // Return the stats (already limited by the API call)
+      return stats;
+    } catch (e) {
+      logger.error('Something went wrong fetching content from Tautulli', {
+        label: 'Tautulli API',
+        errorMessage: e.message,
+        mediaType,
+        timeRangeDays,
+        statType,
+        collectionType,
+        limit,
+      });
+      throw new Error(
+        `[Tautulli] Failed to fetch ${collectionType} content: ${e.message}`
+      );
+    }
+  }
+
+  // Keep the old method for backwards compatibility, but make it use the new one
+  public async getMostWatchedContent(
+    mediaType: 'movie' | 'tv',
+    timeRangeDays = 30,
+    statType: 'plays' | 'duration' = 'plays',
+    limit = 20
+  ): Promise<TautulliHomeStatRow[]> {
+    return this.getContent(
+      mediaType,
+      timeRangeDays,
+      statType,
+      'most_watched',
+      limit
+    );
   }
 }
 

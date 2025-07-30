@@ -131,6 +131,22 @@ export const startJobs = (): void => {
     interval: 'minutes',
     cronSchedule: jobs['plex-collections-sync'].schedule,
     job: schedule.scheduleJob(jobs['plex-collections-sync'].schedule, () => {
+      // Check if any collections are configured before running
+      const settings = getSettings();
+      const hasCollections =
+        settings.plex.collectionConfigs &&
+        settings.plex.collectionConfigs.length > 0;
+
+      if (!hasCollections) {
+        logger.debug(
+          'Skipping scheduled Plex Collections Sync: No collections configured',
+          {
+            label: 'Jobs',
+          }
+        );
+        return;
+      }
+
       logger.info('Starting scheduled job: Plex Collections Sync', {
         label: 'Jobs',
       });

@@ -17,7 +17,7 @@ import xml2js from 'xml2js';
 export function cleanOverseerrLabels(filterStr: string): string {
   if (!filterStr) return '';
   return filterStr
-    .replace(/overseerr[^,]*/gi, '')
+    .replace(/Overseerr[^,]*/gi, '')
     .replace(/,,+/g, ',')
     .replace(/^,|,$/g, '')
     .replace(/^label!=$/, '');
@@ -172,12 +172,16 @@ export async function createOrUpdateCollection(
   allCollections: any[],
   customTitle?: string,
   customVisibility?: string,
-  isGlobalCollection?: boolean
+  isGlobalCollection?: boolean,
+  customLabel?: string,
+  processedCollectionKeys?: Set<string>
 ): Promise<{ isNew: boolean; hasChanges: boolean }> {
   const collectionTitle = customTitle || generateCollectionTitle(user);
-  const labelName = isGlobalCollection
-    ? 'overseerrglobal'
-    : `overseerr${user.plexId}`;
+  const labelName =
+    customLabel ||
+    (isGlobalCollection
+      ? `OverseerrAll${mediaType === 'movie' ? 'Films' : 'TV'}`
+      : `OverseerrUser${user.plexId}`);
 
   try {
     // Get library key
@@ -186,6 +190,7 @@ export async function createOrUpdateCollection(
       (lib) => lib.enabled
     );
     const targetType = mediaType === 'movie' ? 'movie' : 'show';
+
     const matchingLibrary = enabledLibraries.find(
       (lib) => lib.type === targetType
     );
@@ -201,85 +206,169 @@ export async function createOrUpdateCollection(
     const plexItems = await plexClient.getItemsByRatingKeys(ratingKeys);
 
     // Find existing collections for this user
-    const existingUserCollections = allCollections.filter(
-      (collection) =>
+    const existingUserCollections = allCollections.filter((collection) => {
+      const hasMatchingLabel =
         Array.isArray(collection.labels) &&
         collection.labels.some(
           (label: string) => label.toLowerCase() === labelName.toLowerCase()
-        ) &&
-        collection.libraryKey === libraryKey
-    );
+        );
+
+      // Convert both to strings for comparison to handle type mismatches
+      const libraryMatches =
+        String(collection.libraryKey) === String(libraryKey);
+
+      return hasMatchingLabel && libraryMatches;
+    });
 
     let isNew = false;
     let hasChanges = false;
+    let newCollectionRatingKey: string | null = null;
 
-    // Delete existing collections for this user/library
-    for (const collection of existingUserCollections) {
-      try {
-        await plexClient.deleteCollection(collection.ratingKey);
-        hasChanges = true;
-      } catch (deleteError) {
-        logger.warn(
-          `Failed to delete existing collection ${
-            collection.title
-          }: ${extractErrorMessage(deleteError)}`
-        );
-      }
-    }
-
-    // Create new collection if we have items
+    // Create new collection FIRST if we have items - don't delete existing ones until we succeed
     if (plexItems.length > 0) {
       try {
-        const collectionRatingKey = await plexClient.createEmptyCollection(
+        newCollectionRatingKey = await plexClient.createEmptyCollection(
           collectionTitle,
           libraryKey,
           mediaType
         );
 
-        if (collectionRatingKey) {
-          // CRITICAL: Add label FIRST so collection can always be found and cleaned up
-          await plexClient.addLabelToCollection(collectionRatingKey, labelName);
+        if (newCollectionRatingKey) {
+          // CRITICAL: Add label FIRST and verify success before proceeding
+          const labelSuccess = await plexClient.addLabelToCollection(
+            newCollectionRatingKey,
+            labelName
+          );
+          if (!labelSuccess) {
+            // Label addition failed for newly created collection - clean it up and preserve existing collections
+            logger.error(
+              `Label addition failed for newly created collection ${collectionTitle}. Deleting new collection and preserving existing ones.`,
+              {
+                label: 'Collections Utils',
+                collectionRatingKey: newCollectionRatingKey,
+                labelName,
+                collectionTitle,
+              }
+            );
+            try {
+              await plexClient.deleteCollection(newCollectionRatingKey);
+              logger.info(
+                `Successfully cleaned up failed new collection ${newCollectionRatingKey}`,
+                {
+                  label: 'Collections Utils',
+                }
+              );
+            } catch (deleteError) {
+              logger.error(
+                `Failed to cleanup failed new collection ${newCollectionRatingKey}`,
+                {
+                  label: 'Collections Utils',
+                  deleteError,
+                }
+              );
+            }
+            throw new Error(
+              `Failed to add required label "${labelName}" to new collection "${collectionTitle}". Existing collections preserved.`
+            );
+          }
+
+          // NEW COLLECTION CREATED SUCCESSFULLY WITH LABEL - now safe to delete existing ones
+          for (const collection of existingUserCollections) {
+            try {
+              await plexClient.deleteCollection(collection.ratingKey);
+              hasChanges = true;
+
+              logger.info(
+                `Deleted existing collection after successful replacement: ${collection.title} (${collection.ratingKey})`,
+                {
+                  label: 'Collections Utils',
+                  replacedWith: newCollectionRatingKey,
+                }
+              );
+
+              // Track that we processed this collection to avoid double-deletion during cleanup
+              if (processedCollectionKeys) {
+                processedCollectionKeys.add(collection.ratingKey);
+              }
+            } catch (deleteError) {
+              logger.warn(
+                `Failed to delete existing collection ${
+                  collection.title
+                }: ${extractErrorMessage(deleteError)}`
+              );
+            }
+          }
 
           // Set collection content sort to custom FIRST (before adding items)
           await plexClient.updateCollectionContentSort(
-            collectionRatingKey,
+            newCollectionRatingKey,
             'custom'
           );
 
           // ATOMIC BLOCK: Complete all essential operations before any cancellation checks
-          await plexClient.addItemsToCollection(collectionRatingKey, plexItems);
+          await plexClient.addItemsToCollection(
+            newCollectionRatingKey,
+            plexItems
+          );
           await plexClient.arrangeCollectionItemsInOrder(
-            collectionRatingKey,
+            newCollectionRatingKey,
             plexItems
           );
           await plexClient.updateCollectionTitle(
-            collectionRatingKey,
+            newCollectionRatingKey,
             collectionTitle
           );
+          // Use !!! for user/server_owner collections, !! for global collections
+          const sortPrefix =
+            isGlobalCollection || labelName.startsWith('OverseerrAll')
+              ? '!!'
+              : '!!!';
           await plexClient.updateCollectionSortTitle(
-            collectionRatingKey,
-            `!!${collectionTitle}`
+            newCollectionRatingKey,
+            `${sortPrefix}${collectionTitle}`
           );
 
-          // Set collection visibility based on type
-          if (isGlobalCollection) {
-            // Global collections visible on both shared and home
-            await plexClient.updateCollectionVisibility(
-              collectionRatingKey,
-              false, // recommended
-              true, // home
-              true // shared
-            );
+          // Set collection visibility based on configuration
+          let home = false;
+          let shared = false;
+
+          if (customVisibility) {
+            // Use the configured visibility setting
+            switch (customVisibility) {
+              case 'users':
+                home = false; // Not on owner's home
+                shared = true; // Only on shared users' home
+                break;
+              case 'users_admin':
+                home = true; // On owner's home
+                shared = true; // Also on shared users' home
+                break;
+              case 'admin':
+                home = true; // Only on owner's home
+                shared = false; // Not on shared users' home
+                break;
+              case 'none':
+                home = false; // Not on any home screen
+                shared = false; // Only visible in library tab
+                break;
+            }
+          } else if (isGlobalCollection) {
+            // Global collections visible on both shared and home (legacy behavior)
+            home = true;
+            shared = true;
           } else {
-            // Regular user collections: admin collections visible on home, others hidden
+            // Regular user collections: admin collections visible on home, others hidden (legacy behavior)
             const isAdminUser = user.id === 1;
-            await plexClient.updateCollectionVisibility(
-              collectionRatingKey,
-              false, // recommended
-              isAdminUser, // home - only visible for admin
-              false // shared
-            );
+            home = isAdminUser;
+            shared = false;
           }
+
+          await plexClient.updateCollectionVisibility(
+            newCollectionRatingKey,
+            false, // recommended
+            home,
+            shared
+          );
 
           isNew = existingUserCollections.length === 0;
           hasChanges = true;
@@ -329,10 +418,12 @@ export async function cleanupOrphanedCollections(
       );
 
       if (overseerrLabel) {
-        const userPlexId = overseerrLabel.replace(/^overseerr/i, '');
-
-        // Skip global collections during cleanup
-        if (userPlexId === 'global') {
+        // Handle different label formats
+        let userPlexId = '';
+        if (overseerrLabel.toLowerCase().startsWith('overseerruser')) {
+          userPlexId = overseerrLabel.replace(/^OverseerrUser/i, '');
+        } else if (overseerrLabel.toLowerCase().startsWith('overseerr')) {
+          // Skip special collections (global, tautulli, trakt)
           continue;
         }
 
@@ -359,41 +450,7 @@ export async function cleanupOrphanedCollections(
   }
 }
 
-/*Delete all Overseerr collections
- */
-export async function purgeAllCollections(
-  plexClient: PlexAPI
-): Promise<{ deleted: number }> {
-  try {
-    const allCollections = await plexClient.getAllCollections();
-    const overseerrCollections = allCollections.filter(
-      (collection: any) =>
-        Array.isArray(collection.labels) &&
-        collection.labels.some((label: string) =>
-          label.toLowerCase().startsWith('overseerr')
-        )
-    );
-
-    let deleted = 0;
-    for (const collection of overseerrCollections) {
-      try {
-        await plexClient.deleteCollection(collection.ratingKey);
-        deleted++;
-      } catch (error) {
-        logger.warn(
-          `Failed to delete collection ${
-            collection.title
-          }: ${extractErrorMessage(error)}`
-        );
-      }
-    }
-
-    return { deleted };
-  } catch (error) {
-    logger.error(`Purge failed: ${extractErrorMessage(error)}`);
-    return { deleted: 0 };
-  }
-}
+// Removed: purgeAllCollections - use scheduled cleanup instead
 
 // Simple user filter management functions (extracted from UserLabelManager)
 
@@ -415,12 +472,26 @@ export async function updateUserFilterSettings(
       throw new Error('Machine ID not configured');
     }
 
-    // Get user's current filter settings
-    const userServer = await getUserSharedServer(
-      settings.plex.machineId,
-      admin.plexToken,
-      targetUserPlexId
-    );
+    // Get user's current filter settings with robust error handling
+    let userServer: SharedServerData | undefined;
+    try {
+      userServer = await getUserSharedServer(
+        settings.plex.machineId,
+        admin.plexToken,
+        targetUserPlexId
+      );
+    } catch (error) {
+      logger.error(
+        `Failed to get user shared server data for ${targetUserPlexId}`,
+        {
+          label: 'Collections Utils',
+          error: error instanceof Error ? error.message : 'Unknown error',
+        }
+      );
+      throw new Error(
+        `Cannot update user filter settings: Unable to retrieve current filter settings for user ${targetUserPlexId}. This prevents safe label updates that could overwrite existing restrictions.`
+      );
+    }
 
     let currentMovieFilter = '';
     let currentTvFilter = '';
@@ -438,7 +509,7 @@ export async function updateUserFilterSettings(
     const otherUserPlexIds = allUserPlexIds.filter(
       (id) => id !== targetUserPlexId
     );
-    const overseerrLabels = otherUserPlexIds.map((id) => `overseerr${id}`);
+    const overseerrLabels = otherUserPlexIds.map((id) => `OverseerrUser${id}`);
 
     // Combine filters
     let finalMovieFilter = cleanedMovieFilter;
@@ -511,53 +582,52 @@ export async function updateUserFilterSettings(
 
 /*Remove all Overseerr label filters from all users
  */
-export async function purgeUserLabels(
-  plexToken: string
-): Promise<{ processed: number; successful: number; failed: number }> {
-  try {
-    const users = await getUsersWithPlexIds();
-    const results = [];
-
-    // Simple Promise.all processing instead of complex batching
-    for (const user of users) {
-      try {
-        await clearUserFilters(user.plexId?.toString() || '', plexToken);
-        results.push({ success: true });
-      } catch (error) {
-        logger.warn(
-          `Failed to clear filters for user ${
-            user.plexId
-          }: ${extractErrorMessage(error)}`
-        );
-        results.push({ success: false });
-      }
-    }
-
-    const successful = results.filter((r) => r.success).length;
-    const failed = results.length - successful;
-
-    return { processed: users.length, successful, failed };
-  } catch (error) {
-    logger.error(`Purge user labels failed: ${extractErrorMessage(error)}`);
-    return { processed: 0, successful: 0, failed: 0 };
-  }
-}
+// Removed: purgeUserLabels - use scheduled cleanup instead
 
 /*Clear Overseerr label filters for a specific user
  */
-async function clearUserFilters(
+export async function clearUserFilters(
   userPlexId: string,
   plexToken: string
 ): Promise<void> {
   if (!userPlexId) return;
 
-  const url = `https://plex.tv/api/friends/${userPlexId}`;
   const settings = getSettings();
 
   if (!settings.plex.machineId) {
     throw new Error('Machine ID not configured');
   }
 
+  // Get current user filters to preserve non-Overseerr labels
+  let currentMovieFilter = '';
+  let currentTvFilter = '';
+
+  try {
+    const userServer = await getUserSharedServer(
+      settings.plex.machineId,
+      plexToken,
+      userPlexId
+    );
+
+    if (userServer) {
+      currentMovieFilter = decodeURIComponent(userServer.$.filterMovies || '');
+      currentTvFilter = decodeURIComponent(userServer.$.filterTelevision || '');
+    }
+  } catch (error) {
+    logger.warn(
+      `Failed to get current filters for user ${userPlexId}, proceeding with empty filters`,
+      {
+        label: 'Collections Utils',
+        error: error instanceof Error ? error.message : 'Unknown error',
+      }
+    );
+  }
+
+  // Clean only Overseerr labels, preserving all other user labels
+  const cleanedMovieFilter = cleanOverseerrLabels(currentMovieFilter);
+  const cleanedTvFilter = cleanOverseerrLabels(currentTvFilter);
+
+  const url = `https://plex.tv/api/friends/${userPlexId}`;
   const headers = {
     'X-Plex-Token': plexToken,
     Accept: 'application/json',
@@ -566,8 +636,8 @@ async function clearUserFilters(
 
   const payload = {
     server_id: settings.plex.machineId,
-    filterMovies: '',
-    filterTelevision: '',
+    filterMovies: cleanedMovieFilter,
+    filterTelevision: cleanedTvFilter,
   };
 
   const formData = createFormData(payload);

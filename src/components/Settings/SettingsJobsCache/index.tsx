@@ -170,18 +170,10 @@ const SettingsJobs = () => {
   const runJob = async (job: Job) => {
     await axios.post(`/api/v1/settings/jobs/${job.id}/run`);
 
-    // Special handling for plex collections sync when collections are disabled
+    // Collections sync should run regardless of collectionsEnabled flag
     if (job.id === 'plex-collections-sync') {
       try {
-        const plexSettings = await axios.get('/api/v1/settings/plex');
-        if (!plexSettings.data.collectionsEnabled) {
-          addToast(intl.formatMessage(messages.toastCollectionsSyncSkipped), {
-            appearance: 'warning',
-            autoDismiss: true,
-          });
-          revalidate();
-          return;
-        }
+        // Job will determine if there are collections to process
       } catch (error) {
         // If we can't check settings, just proceed with normal message
       }

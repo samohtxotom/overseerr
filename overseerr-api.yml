@@ -184,6 +184,58 @@ components:
         - machineId
         - ip
         - port
+    CollectionConfig:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        name:
+          type: string
+          example: "User Requests"
+        type:
+          type: string
+          enum: ['overseerr', 'tautulli', 'trakt']
+          example: 'overseerr'
+        subtype:
+          type: string
+          example: 'users'
+        template:
+          type: string
+          example: "{nickname}'s Requests"
+        visibility:
+          type: string
+          enum: ['users', 'users_admin', 'admin', 'none']
+          example: 'users'
+        maxItems:
+          type: integer
+          example: 20
+        mediaType:
+          type: string
+          enum: ['movie', 'tv', 'both']
+          example: 'both'
+        searchMissingItems:
+          type: boolean
+          example: false
+        customDays:
+          type: integer
+          description: "Number of days for Tautulli collections (required for Tautulli type)"
+          example: 30
+          nullable: true
+        tautulliStatType:
+          type: string
+          enum: ['plays', 'duration']
+          description: "Tautulli statistic type: plays (play count) or duration (watch time)"
+          example: 'plays'
+          nullable: true
+      required:
+        - id
+        - name
+        - type
+        - subtype
+        - template
+        - visibility
+        - maxItems
     PlexConnection:
       type: object
       properties:
@@ -324,6 +376,13 @@ components:
         externalUrl:
           type: string
           nullable: true
+    TraktSettings:
+      type: object
+      properties:
+        apiKey:
+          type: string
+          nullable: true
+          example: 'your-trakt-api-key-here'
     RadarrSettings:
       type: object
       properties:
@@ -2218,6 +2277,65 @@ paths:
                   error:
                     type: string
                     example: "Could not connect to Plex server"
+  /settings/plex/collections:
+    get:
+      summary: Get Plex collection configurations
+      description: Retrieves current Plex collection configurations and settings.
+      tags:
+        - settings
+      responses:
+        '200':
+          description: Collection configurations retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  collectionConfigs:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CollectionConfig'
+    post:
+      summary: Save Plex collection configurations
+      description: Updates Plex collection configurations and enabled status.
+      tags:
+        - settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                collectionConfigs:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/CollectionConfig'
+      responses:
+        '200':
+          description: Collection configurations saved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  collectionConfigs:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CollectionConfig'
+                  message:
+                    type: string
+                    example: "Collection configurations saved successfully"
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Failed to save collection configurations"
   /settings/tautulli:
     get:
       summary: Get Tautulli settings
@@ -2249,6 +2367,37 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TautulliSettings'
+  /settings/trakt:
+    get:
+      summary: Get Trakt settings
+      description: Retrieves current Trakt settings.
+      tags:
+        - settings
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TraktSettings'
+    post:
+      summary: Update Trakt settings
+      description: Updates Trakt settings with the provided values.
+      tags:
+        - settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TraktSettings'
+      responses:
+        '200':
+          description: 'Values were successfully updated'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TraktSettings'
   /settings/radarr:
     get:
       summary: Get Radarr settings

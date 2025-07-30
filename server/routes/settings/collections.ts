@@ -11,6 +11,97 @@ import { Router } from 'express';
 const collectionsRoutes = Router();
 
 /**
+ * GET /api/v1/settings/plex/collections
+ * Get collection configurations
+ */
+collectionsRoutes.get('/', (_req, res) => {
+  const settings = getSettings();
+  return res.status(200).json({
+    collectionsEnabled: settings.plex.collectionsEnabled,
+    collectionConfigs: settings.plex.collectionConfigs || [],
+  });
+});
+
+/**
+ * POST /api/v1/settings/plex/collections
+ * Save collection configurations
+ */
+collectionsRoutes.post(
+  '/',
+  isAuthenticated(Permission.ADMIN),
+  async (req, res, next) => {
+    try {
+      logger.info('Collections API POST request received', {
+        label: 'Collections API',
+        body: req.body,
+        hasCollectionConfigs: !!req.body.collectionConfigs,
+        collectionsEnabled: req.body.collectionsEnabled,
+      });
+
+      const settings = getSettings();
+
+      // Update collection configurations
+      if (req.body.collectionConfigs) {
+        settings.plex.collectionConfigs = req.body.collectionConfigs;
+        logger.info('Updated collection configurations', {
+          label: 'Collections API',
+          configCount: req.body.collectionConfigs.length,
+        });
+      }
+
+      // Update collections enabled status if provided
+      if (typeof req.body.collectionsEnabled !== 'undefined') {
+        const wasCollectionsEnabled = settings.plex.collectionsEnabled;
+        settings.plex.collectionsEnabled = req.body.collectionsEnabled;
+
+        logger.info('Updated collections enabled status', {
+          label: 'Collections API',
+          from: wasCollectionsEnabled,
+          to: req.body.collectionsEnabled,
+        });
+
+        // Set collectionsEverEnabled if collections are being enabled for the first time
+        if (
+          !wasCollectionsEnabled &&
+          req.body.collectionsEnabled &&
+          !settings.plex.collectionsEverEnabled
+        ) {
+          settings.plex.collectionsEverEnabled = true;
+          logger.info('Set collectionsEverEnabled to true', {
+            label: 'Collections API',
+          });
+        }
+      }
+
+      settings.save();
+
+      logger.info('Collection configurations saved successfully', {
+        label: 'Collections API',
+        configCount: settings.plex.collectionConfigs?.length || 0,
+        collectionsEnabled: settings.plex.collectionsEnabled,
+      });
+
+      return res.status(200).json({
+        collectionsEnabled: settings.plex.collectionsEnabled,
+        collectionConfigs: settings.plex.collectionConfigs || [],
+        message: 'Collection configurations saved successfully',
+      });
+    } catch (error) {
+      logger.error('Error saving collection configurations:', {
+        label: 'Collections API',
+        error: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined,
+        requestBody: req.body,
+      });
+      return next({
+        status: 500,
+        message: 'Failed to save collection configurations',
+      });
+    }
+  }
+);
+
+/**
  * GET /api/v1/settings/plex/collections/sync
  * Get collections sync status (simplified - no detailed progress)
  */
@@ -34,12 +125,8 @@ collectionsRoutes.post(
     try {
       const settings = getSettings();
 
-      if (!settings.plex.collectionsEnabled) {
-        return res.status(400).json({
-          status: 'error',
-          message: 'Plex collections are not enabled',
-        });
-      }
+      // Sync button should work regardless of collectionsEnabled flag
+      // The sync job itself will check if there are collections to process
 
       if (!settings.plex.ip || !settings.plex.port) {
         return res.status(400).json({
@@ -77,14 +164,6 @@ collectionsRoutes.post(
         });
       }
 
-      // Check Plex Pass before allowing sync
-      const hasPlexPass = await plexClient.checkPlexPass();
-      if (!hasPlexPass) {
-        logger.warn(
-          'Collections sync requested but Plex Pass not detected - privacy features may not work'
-        );
-      }
-
       // Start collection sync in background with proper error handling
       setImmediate(async () => {
         try {
@@ -99,7 +178,6 @@ collectionsRoutes.post(
       return res.status(200).json({
         status: 'success',
         message: 'Collections sync started in background',
-        hasPlexPass, // Include Plex Pass status in response
       });
     } catch (error) {
       logger.error('Error starting collections sync:', error);

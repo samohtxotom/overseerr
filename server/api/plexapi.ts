@@ -409,6 +409,10 @@ class PlexAPI {
 
       const collection = response.MediaContainer?.Metadata?.[0];
       if (!collection) {
+        // Collection not found - this is different from an API error
+        logger.debug(`Collection ${ratingKey} not found`, {
+          label: 'Plex API',
+        });
         return null;
       }
 
@@ -423,15 +427,41 @@ class PlexAPI {
         label: 'Plex API',
         error,
       });
+      // Throw error to distinguish from "collection not found"
+      throw new Error(
+        `API error getting collection metadata: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`
+      );
+    }
+  }
+
+  /**
+   * Safely get collection metadata with error handling
+   * Returns null for both "not found" and "API error" cases, but logs appropriately
+   */
+  public async getCollectionMetadataSafe(
+    ratingKey: string
+  ): Promise<PlexCollectionMetadata | null> {
+    try {
+      return await this.getCollectionMetadata(ratingKey);
+    } catch (error) {
+      // API error already logged in getCollectionMetadata
       return null;
     }
   }
 
   private parseLabelsFromCollection(collection: PlexCollection): string[] {
+    // Handle multiple possible label structures from Plex API
     if (Array.isArray(collection.Label)) {
       return collection.Label.map((label) => label.tag).filter(
         (tag): tag is string => typeof tag === 'string'
       );
+    }
+
+    // Fallback: check if labels are already processed and stored in the labels property
+    if (Array.isArray(collection.labels)) {
+      return collection.labels;
     }
 
     return [];
@@ -453,26 +483,30 @@ class PlexAPI {
 
       const items = response.MediaContainer?.Metadata || [];
 
-      if (items.length < ratingKeys.length) {
-        const missingCount = ratingKeys.length - items.length;
-        logger.warn(
-          `${missingCount}/${ratingKeys.length} items could not be found in Plex library.`,
-          {
-            label: 'Plex API',
-            totalRequested: ratingKeys.length,
-            totalFound: items.length,
-          }
-        );
-      }
-
       // CRITICAL: Preserve the original order from ratingKeys array
       // Plex returns items in alphabetical order, but we need chronological request order
       const orderedItems: PlexCollectionItem[] = [];
+      const missingRatingKeys: string[] = [];
+
       for (const ratingKey of ratingKeys) {
         const item = items.find((item: any) => item.ratingKey === ratingKey);
         if (item) {
           orderedItems.push(item);
+        } else {
+          missingRatingKeys.push(ratingKey);
         }
+      }
+
+      if (missingRatingKeys.length > 0) {
+        logger.warn(
+          `${missingRatingKeys.length}/${ratingKeys.length} items could not be found in Plex library.`,
+          {
+            label: 'Plex API',
+            totalRequested: ratingKeys.length,
+            totalFound: items.length,
+            missingRatingKeys: missingRatingKeys,
+          }
+        );
       }
 
       return orderedItems;
@@ -483,7 +517,7 @@ class PlexAPI {
       });
 
       const items: PlexCollectionItem[] = [];
-      let failedCount = 0;
+      const failedRatingKeys: string[] = [];
 
       for (const ratingKey of ratingKeys) {
         try {
@@ -493,20 +527,21 @@ class PlexAPI {
           if (response.MediaContainer?.Metadata?.[0]) {
             items.push(response.MediaContainer.Metadata[0]);
           } else {
-            failedCount++;
+            failedRatingKeys.push(ratingKey);
           }
         } catch {
-          failedCount++;
+          failedRatingKeys.push(ratingKey);
         }
       }
 
-      if (failedCount > 0) {
+      if (failedRatingKeys.length > 0) {
         logger.warn(
-          `${failedCount}/${ratingKeys.length} items could not be found in Plex library.`,
+          `${failedRatingKeys.length}/${ratingKeys.length} items could not be found in Plex library.`,
           {
             label: 'Plex API',
             totalRequested: ratingKeys.length,
             totalFound: items.length,
+            missingRatingKeys: failedRatingKeys,
           }
         );
       }
@@ -767,58 +802,138 @@ class PlexAPI {
     collectionRatingKey: string,
     label: string
   ): Promise<boolean> {
-    try {
-      // Get current collection metadata to preserve existing labels
-      const collectionMeta = await this.getCollectionMetadata(
-        collectionRatingKey
-      );
-      if (!collectionMeta) {
-        throw new Error(
-          `Could not get metadata for collection ${collectionRatingKey}`
+    return this.addLabelToCollectionWithRetry(collectionRatingKey, label, 3);
+  }
+
+  /**
+   * Add label to collection with retry logic and verification
+   */
+  private async addLabelToCollectionWithRetry(
+    collectionRatingKey: string,
+    label: string,
+    maxRetries: number
+  ): Promise<boolean> {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        // Get current collection metadata to preserve existing labels
+        // Use strict version to distinguish API errors from "not found"
+        const collectionMeta = await this.getCollectionMetadata(
+          collectionRatingKey
         );
-      }
-
-      // Clean existing Overseerr labels while preserving user's custom labels
-      const { cleanOverseerrCollectionLabels } = await import(
-        '@server/lib/collectionsUtils'
-      );
-      const existingLabels = collectionMeta.labels || [];
-      const preservedLabels = cleanOverseerrCollectionLabels(existingLabels);
-
-      // Combine preserved labels with new Overseerr label
-      const allLabels = [...preservedLabels, label];
-
-      // Build params with all labels to preserve existing ones
-      const params: Record<string, string | number> = {
-        type: 18,
-        id: collectionRatingKey,
-        'label.locked': 1,
-      };
-
-      // Add each label as a separate parameter
-      allLabels.forEach((labelTag, index) => {
-        params[`label[${index}].tag.tag`] = labelTag;
-      });
-
-      const queryString = Object.entries(params)
-        .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
-        .join('&');
-
-      const editUrl = `/library/metadata/${collectionRatingKey}?${queryString}`;
-
-      await this.safePutQuery(editUrl);
-
-      return true;
-    } catch (error) {
-      logger.error(
-        `Error adding label "${label}" to collection ${collectionRatingKey}`,
-        {
-          label: 'Plex API',
-          error,
+        if (!collectionMeta) {
+          throw new Error(`Collection ${collectionRatingKey} not found`);
         }
-      );
-      return false;
+
+        // Clean existing Overseerr labels while preserving user's custom labels
+        const { cleanOverseerrCollectionLabels } = await import(
+          '@server/lib/collectionsUtils'
+        );
+        const existingLabels = collectionMeta.labels || [];
+        const preservedLabels = cleanOverseerrCollectionLabels(existingLabels);
+
+        // Check if label already exists (case-insensitive comparison since Plex auto-formats labels)
+        const labelExistsIndex = existingLabels.findIndex(
+          (existingLabel) => existingLabel.toLowerCase() === label.toLowerCase()
+        );
+        if (labelExistsIndex !== -1) {
+          return true;
+        }
+
+        // Combine preserved labels with new Overseerr label
+        const allLabels = [...preservedLabels, label];
+
+        // Build params with all labels to preserve existing ones
+        const params: Record<string, string | number> = {
+          type: 18,
+          id: collectionRatingKey,
+          'label.locked': 1,
+        };
+
+        // Add each label as a separate parameter
+        allLabels.forEach((labelTag, index) => {
+          params[`label[${index}].tag.tag`] = labelTag;
+        });
+
+        const queryString = Object.entries(params)
+          .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
+          .join('&');
+
+        const editUrl = `/library/metadata/${collectionRatingKey}?${queryString}`;
+
+        await this.safePutQuery(editUrl);
+
+        // Verify the label was actually added (with a small delay for Plex API)
+        await new Promise((resolve) => setTimeout(resolve, 500)); // Allow Plex time to index the label
+        const updatedMeta = await this.getCollectionMetadata(
+          collectionRatingKey
+        );
+
+        if (
+          !updatedMeta ||
+          !updatedMeta.labels?.some(
+            (existingLabel) =>
+              existingLabel.toLowerCase() === label.toLowerCase()
+          )
+        ) {
+          // Don't fail immediately - Plex might need more time to index labels
+          logger.warn(
+            `Label verification delayed for collection ${collectionRatingKey} - label "${label}" not immediately visible`,
+            {
+              label: 'Plex API',
+              foundLabels: updatedMeta?.labels || [],
+              expectedLabel: label,
+            }
+          );
+
+          // Give Plex more time and try once more
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+          const finalMeta = await this.getCollectionMetadata(
+            collectionRatingKey
+          );
+
+          if (
+            !finalMeta ||
+            !finalMeta.labels?.some(
+              (existingLabel) =>
+                existingLabel.toLowerCase() === label.toLowerCase()
+            )
+          ) {
+            throw new Error(
+              `Label verification failed - label "${label}" not found on collection after multiple attempts. Found labels: ${JSON.stringify(
+                finalMeta?.labels || []
+              )}`
+            );
+          }
+        }
+
+        return true;
+      } catch (error) {
+        logger.warn(
+          `Attempt ${attempt}/${maxRetries} failed to add label "${label}" to collection ${collectionRatingKey}`,
+          {
+            label: 'Plex API',
+            error: error instanceof Error ? error.message : 'Unknown error',
+            attempt,
+            maxRetries,
+          }
+        );
+
+        if (attempt === maxRetries) {
+          logger.error(
+            `Failed to add label "${label}" to collection ${collectionRatingKey} after ${maxRetries} attempts`,
+            {
+              label: 'Plex API',
+              error,
+            }
+          );
+          return false;
+        }
+
+        // Wait before retrying (exponential backoff)
+        await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+      }
     }
+    return false;
   }
 
   public async updateCollectionTitle(

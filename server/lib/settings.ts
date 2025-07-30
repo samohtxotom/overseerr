@@ -25,6 +25,32 @@ export interface Language {
   name: string;
 }
 
+export interface CollectionConfig {
+  id: number;
+  name: string;
+  type: 'overseerr' | 'tautulli' | 'trakt';
+  subtype: string; // Specific option like 'users', 'most_popular_plays', 'most_popular_duration', etc.
+  template: string;
+  customMovieTemplate?: string; // Custom template for movie collections when mediaType is 'both'
+  customTVTemplate?: string; // Custom template for TV collections when mediaType is 'both'
+  visibility: 'users' | 'users_admin' | 'admin' | 'none';
+  maxItems: number;
+  mediaType?: 'movie' | 'tv' | 'both';
+  period?: 'week' | 'month'; // Legacy field, kept for backwards compatibility
+  customDays?: number; // Number of days for Tautulli collections (required for Tautulli type)
+  sortOrder?: number;
+  traktStatType?: 'trending' | 'popular' | 'watched';
+  tautulliStatType?: 'plays' | 'duration'; // Tautulli stat type: plays or duration
+  searchMissingMovies?: boolean; // Auto-request missing movies
+  searchMissingTV?: boolean; // Auto-request missing TV shows
+  autoApproveMovies?: boolean; // Auto-approve movie requests
+  autoApproveTV?: boolean; // Auto-approve TV show requests
+  maxSeasonsToRequest?: number; // Max seasons for auto-approval (TV shows with more seasons require manual approval)
+  // Trakt custom list fields
+  traktCustomListUrl?: string; // Custom Trakt list URL (e.g., https://trakt.tv/users/username/lists/list-name)
+  traktReverseOrder?: boolean; // Reverse the order of items from the list
+}
+
 export interface PlexSettings {
   name: string;
   machineId?: string;
@@ -38,6 +64,12 @@ export interface PlexSettings {
   collectionTemplate?: string;
   collectionVisibility?: 'none' | 'all' | 'admin' | 'shared';
   globalCollectionEnabled?: boolean;
+  collectionConfigs?: CollectionConfig[];
+  usersHomeUnlocked?: boolean; // Secret unlock for Users Home collections
+}
+
+export interface TraktSettings {
+  apiKey?: string;
 }
 
 export interface TautulliSettings {
@@ -269,6 +301,7 @@ interface AllSettings {
   main: MainSettings;
   plex: PlexSettings;
   tautulli: TautulliSettings;
+  trakt: TraktSettings;
   radarr: RadarrSettings[];
   sonarr: SonarrSettings[];
   public: PublicSettings;
@@ -319,8 +352,11 @@ class Settings {
         collectionTemplate: "{nickname}'s requests",
         collectionVisibility: 'none',
         globalCollectionEnabled: false,
+        collectionConfigs: [],
+        usersHomeUnlocked: false,
       },
       tautulli: {},
+      trakt: {},
       radarr: [],
       sonarr: [],
       public: {
@@ -443,7 +479,7 @@ class Settings {
           schedule: '0 0 5 * * *',
         },
         'plex-collections-sync': {
-          schedule: '0 */15 * * * *',
+          schedule: '0 0 */12 * * *',
         },
       },
     };
@@ -478,6 +514,14 @@ class Settings {
 
   set tautulli(data: TautulliSettings) {
     this.data.tautulli = data;
+  }
+
+  get trakt(): TraktSettings {
+    return this.data.trakt;
+  }
+
+  set trakt(data: TraktSettings) {
+    this.data.trakt = data;
   }
 
   get radarr(): RadarrSettings[] {

@@ -58,7 +58,11 @@ function extractDomain(url: string): string {
 /**
  * Parse collection template with full variable replacement
  */
-export function parseCollectionTemplate(template: string, user: User): string {
+export function parseCollectionTemplate(
+  template: string,
+  user: User,
+  mediaType?: 'movie' | 'tv'
+): string {
   if (!template) {
     return `${getUserDisplayName(user)}'s requests`;
   }
@@ -67,6 +71,14 @@ export function parseCollectionTemplate(template: string, user: User): string {
   const domain = extractDomain(settings.main.applicationUrl || '');
   const appTitle = settings.main.applicationTitle || '';
 
+  // Determine media type text for {mediaType} replacement
+  let mediaTypeText = 'Movies & TV Shows';
+  if (mediaType === 'movie') {
+    mediaTypeText = 'Movies';
+  } else if (mediaType === 'tv') {
+    mediaTypeText = 'TV Shows';
+  }
+
   // Full variable replacement
   const result = template
     .replace(/\{user\}/g, getUserDisplayName(user))
@@ -74,6 +86,8 @@ export function parseCollectionTemplate(template: string, user: User): string {
     .replace(/\{nickname\}/g, user.plexTitle || user.displayName || '')
     .replace(/\{domain\}/g, domain)
     .replace(/\{appTitle\}/g, appTitle)
+    .replace(/\{mediaType\}/g, mediaTypeText)
+    .replace(/\{servername\}/g, settings.plex.name || 'Plex Server')
     .trim();
 
   return result || `${getUserDisplayName(user)}'s requests`;

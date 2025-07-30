@@ -132,28 +132,6 @@ settingsRoutes.post('/plex', async (req, res, next) => {
     settings.plex.machineId = result.MediaContainer.machineIdentifier;
     settings.plex.name = result.MediaContainer.friendlyName;
 
-    // Check Plex Pass
-    let hasPlexPass = false;
-    if (req.body.checkPlexPass) {
-      try {
-        hasPlexPass = await plexClient.checkPlexPass();
-        logger.info(
-          `Plex Pass check result: ${hasPlexPass ? 'Active' : 'Inactive'}`,
-          {
-            label: 'Settings API',
-          }
-        );
-      } catch (plexPassError) {
-        logger.warn('Could not check Plex Pass status', {
-          label: 'Settings API',
-          error:
-            plexPassError instanceof Error
-              ? plexPassError.message
-              : 'Unknown error',
-        });
-      }
-    }
-
     // Handle purge operations - when disabling collections
     let purgeResult = null;
     if (req.body.purgeCollections || req.body.purgeUserLabels) {
@@ -184,15 +162,9 @@ settingsRoutes.post('/plex', async (req, res, next) => {
     // 1. Scheduled job (every 15 minutes) when collections are enabled
     // 2. Manual "Save & Run" button in UI
 
-    // Include Plex Pass status if checked and purge results
+    // Include purge results if any
     const response = {
       ...settings.plex,
-      ...(req.body.checkPlexPass && {
-        hasPlexPass,
-        plexPassMessage: hasPlexPass
-          ? 'Plex Pass is active - collections with privacy features are supported'
-          : 'Plex Pass is required for collection privacy features',
-      }),
       ...(purgeResult && {
         status: 'success',
         ...purgeResult,
@@ -364,6 +336,21 @@ settingsRoutes.post('/tautulli', async (req, res, next) => {
   }
 
   return res.status(200).json(settings.tautulli);
+});
+
+settingsRoutes.get('/trakt', (_req, res) => {
+  const settings = getSettings();
+
+  res.status(200).json(settings.trakt);
+});
+
+settingsRoutes.post('/trakt', async (req, res) => {
+  const settings = getSettings();
+
+  Object.assign(settings.trakt, req.body);
+  settings.save();
+
+  return res.status(200).json(settings.trakt);
 });
 
 settingsRoutes.get(
