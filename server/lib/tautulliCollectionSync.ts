@@ -150,7 +150,7 @@ class TautulliCollectionSync {
               : config.template;
 
           const movieCollectionName = movieTemplate
-            .replace('{mediaType}', 'Movies')
+            .replace('{mediaType}', 'Movie')
             .replace('{days}', timeRangeDays.toString())
             .replace('{customdays}', timeRangeDays.toString())
             .replace(
@@ -168,7 +168,8 @@ class TautulliCollectionSync {
             allCollections,
             `OverseerrTautulli${config.id}`,
             processedCollectionKeys,
-            movieResult.stats
+            movieResult.stats,
+            config.visibility
           );
 
           totalCreated += movieCollectionResult.created;
@@ -200,7 +201,7 @@ class TautulliCollectionSync {
               : config.template;
 
           const tvCollectionName = tvTemplate
-            .replace('{mediaType}', 'TV Shows')
+            .replace('{mediaType}', 'TV Show')
             .replace('{days}', timeRangeDays.toString())
             .replace('{customdays}', timeRangeDays.toString())
             .replace(
@@ -218,7 +219,8 @@ class TautulliCollectionSync {
             allCollections,
             `OverseerrTautulli${config.id}`,
             processedCollectionKeys,
-            tvResult.stats
+            tvResult.stats,
+            config.visibility
           );
 
           totalCreated += tvCollectionResult.created;
@@ -260,7 +262,7 @@ class TautulliCollectionSync {
         }
 
         const singleCollectionName = config.template
-          .replace('{mediaType}', mediaType === 'movie' ? 'Movies' : 'TV Shows')
+          .replace('{mediaType}', mediaType === 'movie' ? 'Movie' : 'TV Show')
           .replace('{days}', timeRangeDays.toString())
           .replace('{customdays}', timeRangeDays.toString())
           .replace(
@@ -278,7 +280,8 @@ class TautulliCollectionSync {
           allCollections,
           `OverseerrTautulli${config.id}`,
           processedCollectionKeys,
-          mappingResult.stats
+          mappingResult.stats,
+          config.visibility
         );
 
         return result;
@@ -319,7 +322,7 @@ class TautulliCollectionSync {
       }
 
       const collectionName = `📊 Most Watched ${
-        mediaType === 'movie' ? 'Movies' : 'TV Shows'
+        mediaType === 'movie' ? 'Movie' : 'TV Show'
       } This Week`;
 
       return await this.createTautulliCollection(
@@ -330,7 +333,8 @@ class TautulliCollectionSync {
         allCollections,
         undefined, // customLabel
         undefined, // processedCollectionKeys not available in legacy methods
-        mappingResult.stats
+        mappingResult.stats,
+        'users' // Legacy method, use default users visibility
       );
     } catch (error) {
       logger.error(
@@ -365,7 +369,7 @@ class TautulliCollectionSync {
       }
 
       const collectionName = `📈 Most Watched ${
-        mediaType === 'movie' ? 'Movies' : 'TV Shows'
+        mediaType === 'movie' ? 'Movie' : 'TV Show'
       } This Month`;
 
       return await this.createTautulliCollection(
@@ -376,7 +380,8 @@ class TautulliCollectionSync {
         allCollections,
         undefined, // customLabel
         undefined, // processedCollectionKeys not available in legacy methods
-        mappingResult.stats
+        mappingResult.stats,
+        'users' // Legacy method, use default users visibility
       );
     } catch (error) {
       logger.error(
@@ -389,9 +394,7 @@ class TautulliCollectionSync {
     }
   }
 
-  private async mapTautulliToPlexItems(
-    tautulliStats: any[]
-  ): Promise<{
+  private async mapTautulliToPlexItems(tautulliStats: any[]): Promise<{
     items: TautulliCollectionItem[];
     stats: { original: number; filtered: number; removed: number };
   }> {
@@ -444,7 +447,8 @@ class TautulliCollectionSync {
     allCollections: any[],
     customLabel?: string,
     processedCollectionKeys?: Set<string>,
-    filteringStats?: { original: number; filtered: number; removed: number }
+    filteringStats?: { original: number; filtered: number; removed: number },
+    visibility: 'users' | 'users_admin' | 'admin' | 'none' = 'users'
   ): Promise<{ created: number; updated: number }> {
     try {
       // Create a fake user object for Tautulli collections
@@ -465,7 +469,7 @@ class TautulliCollectionSync {
         plexClient,
         allCollections,
         collectionName,
-        'shared', // Visible to all users
+        visibility, // Use the visibility setting from config
         true, // isTautulliCollection
         customLabel, // Use custom label if provided
         processedCollectionKeys // Pass through processedCollectionKeys parameter

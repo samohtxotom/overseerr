@@ -1081,44 +1081,6 @@ const CollectionConfigForm = ({
             </div>
           )}
 
-          {/* Custom Days (for Tautulli collections) */}
-          {formData.type === 'tautulli' && formData.subtype && (
-            <div className="form-row">
-              <label htmlFor="customDays" className="text-label">
-                No. of Days
-                <span className="label-required">*</span>
-              </label>
-              <div className="form-input-area">
-                <div className="form-input-field">
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    id="customDays"
-                    value={formData.customDays || 30}
-                    onChange={(e) => {
-                      const value = parseInt(e.target.value) || 30;
-                      if (value >= 1 && value <= 365) {
-                        setFormData({ ...formData, customDays: value });
-                      }
-                    }}
-                    className="short"
-                  />
-                </div>
-                {getFieldError(
-                  isCustomDaysValid,
-                  'Number of days is required and must be greater than 0'
-                ) && (
-                  <div className="error">
-                    {getFieldError(
-                      isCustomDaysValid,
-                      'Number of days is required and must be greater than 0'
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
           {/* Custom Trakt List URL (for Trakt custom list collections) */}
           {formData.type === 'trakt' && formData.subtype === 'custom_list' && (
             <div className="form-row">
@@ -1152,7 +1114,7 @@ const CollectionConfigForm = ({
                     )}
                   </div>
                 )}
-                <div className="form-input-hint">
+                <div className="label-tip">
                   Enter the URL of a public Trakt list (e.g.,
                   https://trakt.tv/users/username/lists/list-name)
                 </div>
@@ -1167,25 +1129,86 @@ const CollectionConfigForm = ({
                 Order
               </label>
               <div className="form-input-area">
+                <label className="inline-flex cursor-pointer items-center">
+                  <input
+                    type="checkbox"
+                    id="traktReverseOrder"
+                    checked={formData.traktReverseOrder || false}
+                    onChange={(e) =>
+                      setFormData({
+                        ...formData,
+                        traktReverseOrder: e.target.checked,
+                      })
+                    }
+                    className="form-checkbox"
+                  />
+                  <span className="ml-2 text-white">
+                    Reverse order (newest first)
+                  </span>
+                </label>
+                <div className="label-tip">
+                  Check to reverse the order of items from the list
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Library Selection - always visible when type and subtype are selected */}
+          {formData.type && formData.subtype && (
+            <div className="form-row">
+              <label htmlFor="collectionLibrary" className="text-label">
+                Library
+                <span className="label-required">*</span>
+              </label>
+              <div className="form-input-area">
                 <div className="form-input-field">
-                  <label className="inline-flex items-center">
-                    <input
-                      type="checkbox"
-                      id="traktReverseOrder"
-                      checked={formData.traktReverseOrder || false}
-                      onChange={(e) =>
+                  <select
+                    id="collectionLibrary"
+                    value={formData.libraryId || ''}
+                    onChange={(e) => {
+                      const selectedValue = e.target.value;
+                      if (selectedValue === 'all') {
                         setFormData({
                           ...formData,
-                          traktReverseOrder: e.target.checked,
-                        })
+                          libraryId: 'all',
+                          libraryName: 'All Libraries',
+                          mediaType: 'both',
+                        });
+                      } else if (selectedValue === '') {
+                        setFormData({
+                          ...formData,
+                          libraryId: undefined,
+                          libraryName: undefined,
+                          mediaType: 'both',
+                        });
+                      } else {
+                        const selectedLibrary = data?.libraries.find(
+                          (lib) => lib.id === selectedValue
+                        );
+                        setFormData({
+                          ...formData,
+                          libraryId: selectedValue,
+                          libraryName: selectedLibrary?.name,
+                          mediaType:
+                            selectedLibrary?.type === 'show'
+                              ? 'tv'
+                              : selectedLibrary?.type === 'movie'
+                              ? 'movie'
+                              : 'both',
+                        });
                       }
-                      className="form-checkbox"
-                    />
-                    <span className="ml-2">Reverse order (newest first)</span>
-                  </label>
-                </div>
-                <div className="form-input-hint">
-                  Check to reverse the order of items from the list
+                    }}
+                  >
+                    <option value="">Select Libraries...</option>
+                    <option value="all">All Libraries</option>
+                    {data?.libraries
+                      .filter((lib) => lib.enabled)
+                      .map((library) => (
+                        <option key={library.id} value={library.id}>
+                          {library.name}
+                        </option>
+                      ))}
+                  </select>
                 </div>
               </div>
             </div>
@@ -1194,62 +1217,43 @@ const CollectionConfigForm = ({
           {/* Form unlocks when required fields are selected */}
           {formData.type &&
             formData.subtype &&
+            formData.libraryId &&
             (formData.type !== 'tautulli' || formData.customDays) &&
             (formData.type !== 'trakt' ||
               formData.subtype !== 'custom_list' ||
               formData.traktCustomListUrl) && (
               <>
-                {/* Library - moved to top for better UX */}
-                <div className="form-row">
-                  <label htmlFor="collectionLibrary" className="text-label">
-                    Library
-                  </label>
-                  <div className="form-input-area">
-                    <div className="form-input-field">
-                      <select
-                        id="collectionLibrary"
-                        value={formData.libraryId || 'all'}
-                        onChange={(e) => {
-                          const selectedValue = e.target.value;
-                          if (selectedValue === 'all') {
-                            setFormData({
-                              ...formData,
-                              libraryId: undefined,
-                              libraryName: undefined,
-                              mediaType: 'both',
-                            });
-                          } else {
-                            const selectedLibrary = data?.libraries.find(
-                              (lib) => lib.id === selectedValue
-                            );
-                            setFormData({
-                              ...formData,
-                              libraryId: selectedValue,
-                              libraryName: selectedLibrary?.name,
-                              mediaType:
-                                selectedLibrary?.type === 'show'
-                                  ? 'tv'
-                                  : selectedLibrary?.type === 'movie'
-                                  ? 'movie'
-                                  : 'both',
-                            });
-                          }
-                        }}
-                      >
-                        <option value="all">
-                          All Libraries (Movies & TV Shows)
-                        </option>
-                        {data?.libraries
-                          .filter((lib) => lib.enabled)
-                          .map((library) => (
-                            <option key={library.id} value={library.id}>
-                              {library.name}
-                            </option>
-                          ))}
-                      </select>
+                {/* Custom Days (for Tautulli collections) - moved here from above */}
+                {formData.type === 'tautulli' && (
+                  <div className="form-row">
+                    <label htmlFor="customDays" className="text-label">
+                      No. of Days
+                      <span className="label-required">*</span>
+                    </label>
+                    <div className="form-input-area">
+                      <div className="form-input-field">
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          id="customDays"
+                          value={formData.customDays || 30}
+                          onChange={(e) => {
+                            const value = parseInt(e.target.value) || 30;
+                            if (value >= 1 && value <= 365) {
+                              setFormData({ ...formData, customDays: value });
+                            }
+                          }}
+                          className="short"
+                          min="1"
+                          max="365"
+                        />
+                      </div>
+                      <div className="label-tip">
+                        Number of days to look back for statistics (1-365)
+                      </div>
                     </div>
                   </div>
-                </div>
+                )}
 
                 {/* Collection Title Template */}
                 <div className="form-row">
@@ -1766,13 +1770,13 @@ const SettingsPlex = ({ onComplete }: SettingsPlexProps) => {
 
   // Secret unlock logic
   const checkForUnlockSequence = () => {
-    // Check if there's a Tautulli collection with 69 items and user has clicked 10 times
-    const tautulliCollectionWith69Items = collectionConfigs.find(
-      (config) => config.type === 'tautulli' && config.maxItems === 69
+    // Check if there's a Tautulli collection with 69 days and user has clicked 10 times
+    const tautulliCollectionWith69Days = collectionConfigs.find(
+      (config) => config.type === 'tautulli' && config.customDays === 69
     );
 
     if (
-      tautulliCollectionWith69Items &&
+      tautulliCollectionWith69Days &&
       badgeClickCount >= 10 &&
       !data?.usersHomeUnlocked
     ) {
@@ -1909,7 +1913,7 @@ const SettingsPlex = ({ onComplete }: SettingsPlexProps) => {
     const newConfig: CollectionConfig = {
       id: 0, // Will be assigned on save
       name: '', // Will be generated from template
-      type: 'overseerr' as const,
+      type: '' as any, // Start with empty selection
       subtype: '',
       template: '',
       customMovieTemplate: '', // Initialize empty custom movie template
@@ -2661,14 +2665,14 @@ const SettingsPlex = ({ onComplete }: SettingsPlexProps) => {
                         </h5>
                       </div>
                       <div className="flex flex-wrap items-center space-x-3">
-                        <Badge badgeType="primary">
+                        <Badge badgeType="primary" className="!bg-opacity-40">
                           {config.type === 'overseerr'
                             ? 'Overseerr Requests'
                             : config.type === 'tautulli'
                             ? 'Tautulli Statistics'
                             : 'Trakt Lists'}
                         </Badge>
-                        <Badge badgeType="default">
+                        <Badge badgeType="default" className="!bg-opacity-30">
                           {(() => {
                             const getSubtypeLabel = (
                               type: string,
@@ -2740,16 +2744,19 @@ const SettingsPlex = ({ onComplete }: SettingsPlexProps) => {
                             }}
                             className="cursor-pointer border-none bg-transparent p-0"
                           >
-                            <Badge badgeType="default">
+                            <Badge
+                              badgeType="default"
+                              className="!bg-opacity-30"
+                            >
                               {config.maxItems} items
                             </Badge>
                           </button>
                         ) : (
-                          <Badge badgeType="default">
+                          <Badge badgeType="default" className="!bg-opacity-30">
                             {config.maxItems} items
                           </Badge>
                         )}
-                        <Badge badgeType="default">
+                        <Badge badgeType="default" className="!bg-opacity-30">
                           {config.visibility === 'admin'
                             ? 'Server Owner Only'
                             : config.visibility === 'users_admin'
@@ -2758,7 +2765,7 @@ const SettingsPlex = ({ onComplete }: SettingsPlexProps) => {
                             ? 'Users Only'
                             : 'Library Only'}
                         </Badge>
-                        <Badge badgeType="default">
+                        <Badge badgeType="default" className="!bg-opacity-30">
                           {config.libraryName ||
                             (config.mediaType === 'both'
                               ? 'All Libraries'
@@ -2790,6 +2797,38 @@ const SettingsPlex = ({ onComplete }: SettingsPlexProps) => {
                               : 'Auto-Request TV'}
                           </Badge>
                         )}
+                        {config.type === 'tautulli' &&
+                          config.customDays &&
+                          (config.customDays === 69 ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setBadgeClickCount((prev) => {
+                                  const newCount = prev + 1;
+                                  if (newCount >= 10) {
+                                    // Use setTimeout to allow state to update before checking
+                                    setTimeout(checkForUnlockSequence, 100);
+                                  }
+                                  return newCount;
+                                });
+                              }}
+                              className="cursor-pointer border-none bg-transparent p-0"
+                            >
+                              <Badge
+                                badgeType="default"
+                                className="!bg-opacity-30"
+                              >
+                                {config.customDays} days
+                              </Badge>
+                            </button>
+                          ) : (
+                            <Badge
+                              badgeType="default"
+                              className="!bg-opacity-30"
+                            >
+                              {config.customDays} days
+                            </Badge>
+                          ))}
                       </div>
                     </div>
                     <div className="flex items-center space-x-2">

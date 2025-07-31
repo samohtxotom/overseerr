@@ -485,7 +485,14 @@ class CollectionsSync {
       const userRepository = getRepository(User);
       const usersWithPlexIds = await userRepository.find({
         where: { plexId: Not(IsNull()) },
-        select: { id: true, plexId: true, displayName: true },
+        select: {
+          id: true,
+          plexId: true,
+          plexTitle: true,
+          plexUsername: true,
+          username: true,
+          email: true,
+        },
       });
 
       let cleanedCount = 0;
@@ -1105,7 +1112,7 @@ class CollectionsSync {
           )
           .replace('{servername}', settings.plex.name || 'Plex Server')
           .replace('{subtype}', 'Server Owner Requests')
-          .replace('{mediaType}', 'Movies')
+          .replace('{mediaType}', 'Movie')
           .replace('{customdays}', '30')
           .replace('{days}', '30');
 
@@ -1142,7 +1149,7 @@ class CollectionsSync {
           )
           .replace('{servername}', settings.plex.name || 'Plex Server')
           .replace('{subtype}', 'Server Owner Requests')
-          .replace('{mediaType}', 'TV Shows')
+          .replace('{mediaType}', 'TV Show')
           .replace('{customdays}', '30')
           .replace('{days}', '30');
 

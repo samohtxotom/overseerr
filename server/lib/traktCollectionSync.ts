@@ -256,7 +256,8 @@ class TraktCollectionSync {
           plexClient,
           allCollections,
           config.id,
-          processedCollectionKeys
+          processedCollectionKeys,
+          config.visibility
         );
         created += movieResult.created;
         updated += movieResult.updated;
@@ -278,7 +279,8 @@ class TraktCollectionSync {
           plexClient,
           allCollections,
           config.id,
-          processedCollectionKeys
+          processedCollectionKeys,
+          config.visibility
         );
         created += tvResult.created;
         updated += tvResult.updated;
@@ -382,7 +384,7 @@ class TraktCollectionSync {
         plexUsername: serviceUsername,
         plexTitle: displayName,
         // Service user with auto-approve permissions
-        permissions: 6, // REQUEST + AUTO_APPROVE permissions (2 + 4 = 6)
+        permissions: 32 + 128 + 256 + 512, // REQUEST + AUTO_APPROVE + AUTO_APPROVE_MOVIE + AUTO_APPROVE_TV = 928
         userType: 1, // LOCAL user type
         avatar: '/trakt-logo.svg',
         createdAt: new Date(),
@@ -422,7 +424,7 @@ class TraktCollectionSync {
         plexUsername: serviceUsername,
         plexTitle: displayName,
         // Service user with only request permissions (no auto-approve)
-        permissions: 2, // REQUEST permission only
+        permissions: 32, // REQUEST permission only
         userType: 1, // LOCAL user type
         avatar: '/trakt-logo.svg',
         createdAt: new Date(),
@@ -707,7 +709,8 @@ class TraktCollectionSync {
     plexClient: PlexAPI,
     allCollections: any[],
     configId: number,
-    processedCollectionKeys?: Set<string>
+    processedCollectionKeys?: Set<string>,
+    visibility: 'users' | 'users_admin' | 'admin' | 'none' = 'users'
   ): Promise<{ created: number; updated: number }> {
     try {
       // Create a fake user object for Trakt collections
@@ -734,7 +737,7 @@ class TraktCollectionSync {
         plexClient,
         allCollections,
         finalCollectionName,
-        'shared', // Visible to all users
+        visibility, // Use the visibility setting from config
         true, // isTraktCollection
         `OverseerrTrakt${configId}`, // Custom label for this specific Trakt collection
         processedCollectionKeys // Now properly track Trakt collection deletions
@@ -775,7 +778,7 @@ class TraktCollectionSync {
     const subtypeLabel = this.getSubtypeLabel(config?.subtype || '');
 
     return template
-      .replace('{mediaType}', mediaType === 'movie' ? 'Movies' : 'TV Shows')
+      .replace('{mediaType}', mediaType === 'movie' ? 'Movie' : 'TV Show')
       .replace('{servername}', serverName)
       .replace('{subtype}', subtypeLabel)
       .replace('{customdays}', '30') // Default for Trakt
