@@ -11,6 +11,7 @@ import {
 } from '@server/lib/utils/templateUtils';
 import logger from '@server/logger';
 import xml2js from 'xml2js';
+import type { CollectionVisibilityConfig } from './collections/types';
 
 // Removed: CollectionDiff interface, diffCollection functions, advanced batch processing
 
@@ -48,7 +49,7 @@ export async function getAdminUser(): Promise<User | null> {
   const userRepository = getRepository(User);
   return await userRepository.findOne({
     where: { id: DEFAULTS.ADMIN_USER_ID },
-    select: { id: true, plexToken: true },
+    select: { id: true, plexToken: true, plexId: true },
   });
 }
 
@@ -170,11 +171,14 @@ export async function createOrUpdateCollection(
   mediaType: 'movie' | 'tv',
   plexClient: PlexAPI,
   allCollections: any[],
+  visibilityConfig: CollectionVisibilityConfig,
   customTitle?: string,
-  customVisibility?: string,
   isGlobalCollection?: boolean,
   customLabel?: string,
-  processedCollectionKeys?: Set<string>
+  processedCollectionKeys?: Set<string>,
+  sortOrderLibrary?: number,
+  totalCollectionsInLibrary?: number,
+  customPoster?: string
 ): Promise<{ isNew: boolean; hasChanges: boolean }> {
   const collectionTitle = customTitle || generateCollectionTitle(user);
   const labelName =
@@ -318,57 +322,71 @@ export async function createOrUpdateCollection(
             newCollectionRatingKey,
             collectionTitle
           );
-          // Use !!! for user/server_owner collections, !! for global collections
-          const sortPrefix =
-            isGlobalCollection || labelName.startsWith('OverseerrAll')
-              ? '!!'
-              : '!!!';
+          // Calculate sortTitle prefix based on library tab position
+          let sortTitle = collectionTitle;
+          if (sortOrderLibrary !== undefined && totalCollectionsInLibrary !== undefined) {
+            // Calculate prefix: base '!!' + extra '!' characters based on position
+            // Position 1 of 8: '!!!!!!!!' (base + 6 extra), Position 8: '!!' (base only)
+            const extraExclamations = Math.max(0, totalCollectionsInLibrary - sortOrderLibrary - 1);
+            const sortPrefix = '!!' + '!'.repeat(extraExclamations);
+            sortTitle = `${sortPrefix}${collectionTitle}`;
+            
+          } else {
+            // Fallback to old logic if sorting info not provided
+            const sortPrefix =
+              isGlobalCollection || labelName.startsWith('OverseerrAll')
+                ? '!!'
+                : '!!!';
+            sortTitle = `${sortPrefix}${collectionTitle}`;
+            
+          }
+          
           await plexClient.updateCollectionSortTitle(
             newCollectionRatingKey,
-            `${sortPrefix}${collectionTitle}`
+            sortTitle
           );
 
           // Set collection visibility based on configuration
           let home = false;
           let shared = false;
+          let recommended = false;
 
-          if (customVisibility) {
-            // Use the configured visibility setting
-            switch (customVisibility) {
-              case 'users':
-                home = false; // Not on owner's home
-                shared = true; // Only on shared users' home
-                break;
-              case 'users_admin':
-                home = true; // On owner's home
-                shared = true; // Also on shared users' home
-                break;
-              case 'admin':
-                home = true; // Only on owner's home
-                shared = false; // Not on shared users' home
-                break;
-              case 'none':
-                home = false; // Not on any home screen
-                shared = false; // Only visible in library tab
-                break;
-            }
-          } else if (isGlobalCollection) {
-            // Global collections visible on both shared and home (legacy behavior)
-            home = true;
-            shared = true;
-          } else {
-            // Regular user collections: admin collections visible on home, others hidden (legacy behavior)
-            const isAdminUser = user.id === 1;
-            home = isAdminUser;
-            shared = false;
+          // If Library Tab Only is NOT selected, use the individual visibility settings
+          if (!visibilityConfig.libraryTabOnly) {
+            home = visibilityConfig.serverOwnerHome;
+            shared = visibilityConfig.usersHome;
+            recommended = visibilityConfig.libraryRecommended;
           }
+          // If Library Tab Only IS selected, all remain false (default values above)
 
           await plexClient.updateCollectionVisibility(
             newCollectionRatingKey,
-            false, // recommended
+            recommended,
             home,
             shared
           );
+
+          // Handle custom poster - set if provided, or reset to default if removed
+          if (customPoster) {
+            try {
+              const { getPosterPath, posterExists } = await import('@server/lib/posterStorage');
+              if (posterExists(customPoster)) {
+                const posterPath = getPosterPath(customPoster);
+                await plexClient.updateCollectionPoster(newCollectionRatingKey, posterPath);
+                logger.info(`Set custom poster for collection: ${collectionTitle}`);
+              } else {
+                logger.warn(`Custom poster file not found: ${customPoster}`);
+              }
+            } catch (error) {
+              logger.error(`Failed to set custom poster for collection ${collectionTitle}: ${extractErrorMessage(error)}`);
+              // Don't fail the entire collection creation if poster update fails
+            }
+          } else {
+            // Check if there were existing collections with custom posters that should be reset
+            if (existingUserCollections.length > 0) {
+              logger.info(`Reset to default poster for collection: ${collectionTitle} (custom poster removed)`);
+            }
+          }
 
           isNew = existingUserCollections.length === 0;
           hasChanges = true;
@@ -510,6 +528,12 @@ export async function updateUserFilterSettings(
       (id) => id !== targetUserPlexId
     );
     const overseerrLabels = otherUserPlexIds.map((id) => `OverseerrUser${id}`);
+    
+    // Also exclude server owner collections for non-admin users
+    const adminUser = await getAdminUser();
+    if (adminUser?.plexId && adminUser.plexId.toString() !== targetUserPlexId) {
+      overseerrLabels.push(`OverseerrOwner${adminUser.plexId}`);
+    }
 
     // Combine filters
     let finalMovieFilter = cleanedMovieFilter;

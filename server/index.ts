@@ -58,6 +58,15 @@ app
     // Load Settings
     const settings = getSettings().load();
     restartFlag.initializeSettings(settings.main);
+    
+    // Initialize poster storage directory
+    try {
+      const { initializePosterStorage } = await import('@server/lib/posterStorage');
+      initializePosterStorage();
+      logger.info('Poster storage initialized successfully');
+    } catch (error) {
+      logger.error('Failed to initialize poster storage:', error);
+    }
 
     // Migrate library types
     if (

@@ -195,7 +195,7 @@ components:
           example: "User Requests"
         type:
           type: string
-          enum: ['overseerr', 'tautulli', 'trakt']
+          enum: ['overseerr', 'tautulli', 'trakt', 'tmdb', 'imdb']
           example: 'overseerr'
         subtype:
           type: string
@@ -203,10 +203,45 @@ components:
         template:
           type: string
           example: "{nickname}'s Requests"
-        visibility:
+        customMovieTemplate:
           type: string
-          enum: ['users', 'users_admin', 'admin', 'none']
-          example: 'users'
+          description: "Custom template for movie collections when mediaType is 'both'"
+          example: "{nickname}'s Movie Requests"
+          nullable: true
+        customTVTemplate:
+          type: string
+          description: "Custom template for TV collections when mediaType is 'both'"
+          example: "{nickname}'s TV Requests"
+          nullable: true
+        customPoster:
+          type: string
+          description: "Filename of custom poster image for this collection"
+          example: "f47ac10b-58cc-4372-a567-0e02b2c3d479.jpg"
+          nullable: true
+        visibilityConfig:
+          type: object
+          properties:
+            usersHome:
+              type: boolean
+              description: "Show on shared users' home screens"
+              example: true
+            serverOwnerHome:
+              type: boolean
+              description: "Show on server owner's home screen"
+              example: false
+            libraryRecommended:
+              type: boolean
+              description: "Show in library recommended section"
+              example: false
+            libraryTabOnly:
+              type: boolean
+              description: "Show only in library tab (overrides other options)"
+              example: false
+          required:
+            - usersHome
+            - serverOwnerHome
+            - libraryRecommended
+            - libraryTabOnly
         maxItems:
           type: integer
           example: 20
@@ -214,9 +249,36 @@ components:
           type: string
           enum: ['movie', 'tv', 'both']
           example: 'both'
-        searchMissingItems:
+        libraryId:
+          type: string
+          description: "Selected library ID ('all' for all enabled libraries)"
+          example: "1"
+          nullable: true
+        libraryName:
+          type: string
+          description: "Selected library name for display"
+          example: "Movies"
+          nullable: true
+        sortOrderHome:
+          type: integer
+          description: "Order for Plex home screen (creation time based)"
+          example: 0
+          nullable: true
+        sortOrderLibrary:
+          type: integer
+          description: "Order for Plex library tab (sortTitle based)"
+          example: 0
+          nullable: true
+        parentConfigId:
+          type: integer
+          description: "Reference to original config when expanded from 'all' libraries"
+          example: 1
+          nullable: true
+        isExpandedConfig:
           type: boolean
+          description: "True if this config was auto-generated from a parent 'all' config"
           example: false
+          nullable: true
         customDays:
           type: integer
           description: "Number of days for Tautulli collections (required for Tautulli type)"
@@ -227,6 +289,140 @@ components:
           enum: ['plays', 'duration']
           description: "Tautulli statistic type: plays (play count) or duration (watch time)"
           example: 'plays'
+          nullable: true
+        searchMissingMovies:
+          type: boolean
+          description: "Auto-request missing movies"
+          example: false
+          nullable: true
+        searchMissingTV:
+          type: boolean
+          description: "Auto-request missing TV shows"
+          example: false
+          nullable: true
+        autoApproveMovies:
+          type: boolean
+          description: "Auto-approve movie requests"
+          example: false
+          nullable: true
+        autoApproveTV:
+          type: boolean
+          description: "Auto-approve TV show requests"
+          example: false
+          nullable: true
+        maxSeasonsToRequest:
+          type: integer
+          description: "Max seasons for auto-approval (TV shows with more seasons require manual approval)"
+          example: 5
+          nullable: true
+        traktCustomListUrl:
+          type: string
+          description: "Custom Trakt list URL (e.g., https://trakt.tv/users/username/lists/list-name)"
+          example: "https://trakt.tv/users/username/lists/my-list"
+          nullable: true
+        tmdbCustomListUrl:
+          type: string
+          description: "Custom TMDb list/collection URL (e.g., https://www.themoviedb.org/list/123456)"
+          example: "https://www.themoviedb.org/collection/123456"
+          nullable: true
+        imdbCustomListUrl:
+          type: string
+          description: "Custom IMDb list URL (e.g., https://www.imdb.com/list/ls123456789/)"
+          example: "https://www.imdb.com/list/ls123456789/"
+          nullable: true
+        reverseOrder:
+          type: boolean
+          description: "Reverse the order of items from the source"
+          example: false
+          nullable: true
+        randomizeOrder:
+          type: boolean
+          description: "Randomize the order of items (mutually exclusive with reverseOrder)"
+          example: false
+          nullable: true
+        timeRestriction:
+          type: object
+          description: "Time restriction settings for the collection"
+          properties:
+            alwaysActive:
+              type: boolean
+              description: "If true, collection is always active (default)"
+              example: true
+            removeFromPlexWhenInactive:
+              type: boolean
+              description: "If true, completely remove from Plex when inactive (old behavior)"
+              example: false
+              nullable: true
+            inactiveVisibilityConfig:
+              type: object
+              description: "Visibility settings to use when collection is inactive (only used if removeFromPlexWhenInactive is false)"
+              properties:
+                usersHome:
+                  type: boolean
+                  description: "Show on shared users' home screens when inactive"
+                  example: false
+                serverOwnerHome:
+                  type: boolean
+                  description: "Show on server owner's home screen when inactive"
+                  example: false
+                libraryRecommended:
+                  type: boolean
+                  description: "Show in library recommended section when inactive"
+                  example: true
+                libraryTabOnly:
+                  type: boolean
+                  description: "Show only in library tab when inactive"
+                  example: false
+              required:
+                - usersHome
+                - serverOwnerHome
+                - libraryRecommended
+                - libraryTabOnly
+              nullable: true
+            dateRanges:
+              type: array
+              description: "Date ranges when collection should be active (repeated annually)"
+              items:
+                type: object
+                properties:
+                  startDate:
+                    type: string
+                    description: "DD-MM format (e.g., '05-12' for 5th December)"
+                    example: "05-12"
+                  endDate:
+                    type: string
+                    description: "DD-MM format (e.g., '26-12' for 26th December)"
+                    example: "26-12"
+                required:
+                  - startDate
+                  - endDate
+              nullable: true
+            weeklySchedule:
+              type: object
+              description: "Days of the week when collection should be active"
+              properties:
+                monday:
+                  type: boolean
+                  example: true
+                tuesday:
+                  type: boolean
+                  example: true
+                wednesday:
+                  type: boolean
+                  example: true
+                thursday:
+                  type: boolean
+                  example: true
+                friday:
+                  type: boolean
+                  example: true
+                saturday:
+                  type: boolean
+                  example: false
+                sunday:
+                  type: boolean
+                  example: false
+              nullable: true
           nullable: true
       required:
         - id
@@ -2336,6 +2532,356 @@ paths:
                   message:
                     type: string
                     example: "Failed to save collection configurations"
+  /settings/plex/collections/fetch-title:
+    post:
+      summary: Fetch title from external collection URL
+      description: |
+        Fetches the title/name of an external collection from Trakt, TMDb, or IMDb URLs.
+        
+        **Security Features:**
+        - Rate limiting: Maximum 10 requests per minute per user
+        - URL validation: Only HTTPS URLs from authorized domains are allowed
+        - URL sanitization: Query parameters and fragments are removed for security
+        
+        **Supported URL Formats:**
+        - Trakt: `https://trakt.tv/users/username/lists/listname`
+        - TMDb: `https://www.themoviedb.org/collection/123456`
+        - IMDb: `https://www.imdb.com/list/ls123456789`
+      tags:
+        - settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                url:
+                  type: string
+                  description: The HTTPS URL of the external collection from an authorized domain
+                  example: "https://trakt.tv/users/username/lists/my-list"
+                type:
+                  type: string
+                  enum: [trakt, tmdb, imdb]
+                  description: The type of external service
+                  example: "trakt"
+              required:
+                - url
+                - type
+      responses:
+        '200':
+          description: Title fetched successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "success"
+                  title:
+                    type: string
+                    example: "Marvel Movies"
+                  mediaType:
+                    type: string
+                    enum: [movie, tv, both]
+                    description: "Detected media type of the collection"
+                    example: "movie"
+        '400':
+          description: Bad request - Invalid input or URL validation failed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "error"
+                  message:
+                    type: string
+                    enum:
+                      - "URL and type are required"
+                      - "Only HTTPS URLs are allowed"
+                      - "Invalid domain for trakt collection. Allowed domains: trakt.tv"
+                      - "Invalid Trakt list URL format. Expected: https://trakt.tv/users/username/lists/listname"
+                      - "Invalid TMDb collection URL format. Expected: https://www.themoviedb.org/collection/123456"
+                      - "Invalid IMDb list URL format. Expected: https://www.imdb.com/list/ls123456789"
+                      - "Invalid URL format"
+                      - "Unsupported collection type"
+                    example: "Invalid URL format"
+        '429':
+          description: Too Many Requests - Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "error"
+                  message:
+                    type: string
+                    example: "Too many requests. Please wait before trying again."
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "error"
+                  message:
+                    type: string
+                    example: "Internal server error while fetching title"
+  /settings/collections/poster:
+    post:
+      summary: Upload collection poster image
+      description: |
+        Uploads a custom poster image for collections. The image will be processed, optimized, and stored securely.
+        
+        **Important: Sync-Based Behavior**
+        - Posters are only validated and stored when uploaded
+        - Posters are applied to Plex collections during the next collection sync run
+        - Changes are not immediately visible in Plex until sync occurs
+        
+        **Security Features:**
+        - Admin-only access required
+        - File type validation (JPEG, PNG, WebP only)
+        - File size limit (10MB maximum)
+        - Automatic image processing and optimization
+        - Secure filename generation using UUIDs
+        
+        **Processing:**
+        - Images are automatically resized to 500x750 pixels (2:3 aspect ratio)
+        - All images are converted to JPEG format for consistency
+        - Quality optimization applied (85% quality)
+      tags:
+        - settings
+      security:
+        - cookieAuth: []
+        - apiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                poster:
+                  type: string
+                  format: binary
+                  description: The poster image file (JPEG, PNG, or WebP, max 10MB)
+              required:
+                - poster
+      responses:
+        '200':
+          description: Poster uploaded successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  filename:
+                    type: string
+                    description: The generated filename for the uploaded poster
+                    example: "f47ac10b-58cc-4372-a567-0e02b2c3d479.jpg"
+                  url:
+                    type: string
+                    description: The URL to access the uploaded poster
+                    example: "/api/v1/settings/collections/poster/f47ac10b-58cc-4372-a567-0e02b2c3d479.jpg"
+        '400':
+          description: Bad request - Invalid file or upload error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    enum:
+                      - "No file uploaded"
+                      - "Invalid file type. Only JPEG, PNG, and WebP are allowed."
+                      - "File extension does not match file type."
+                      - "File size too large. Maximum size: 10MB"
+                      - "Invalid image format detected"
+                      - "Image dimensions too large"
+                      - "Failed to process poster"
+                    example: "Invalid file type. Only JPEG, PNG, and WebP are allowed."
+        '403':
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Insufficient permissions"
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Internal server error"
+  /settings/collections/poster/{filename}:
+    get:
+      summary: Serve collection poster image
+      description: |
+        Serves a collection poster image by filename. Images are cached for optimal performance.
+        
+        **Security Features:**
+        - Filename validation to prevent path traversal attacks
+        - UUID-based filenames make guessing difficult
+        - No authentication required (images are already admin-uploaded)
+        
+        **Caching:**
+        - Images are cached for 1 year for optimal performance
+        - Content-Type is always image/jpeg (all images are converted)
+      tags:
+        - settings
+      parameters:
+        - name: filename
+          in: path
+          required: true
+          description: The filename of the poster image (UUID format with extension)
+          schema:
+            type: string
+            pattern: '^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\.(jpg|jpeg|png|webp)$'
+            example: "f47ac10b-58cc-4372-a567-0e02b2c3d479.jpg"
+      responses:
+        '200':
+          description: Poster image served successfully
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+          headers:
+            Cache-Control:
+              description: Caching directive
+              schema:
+                type: string
+                example: "public, max-age=31536000"
+            Content-Type:
+              description: Content type header
+              schema:
+                type: string
+                example: "image/jpeg"
+        '400':
+          description: Invalid filename format
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Invalid filename"
+        '404':
+          description: Poster not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Poster not found"
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Failed to serve poster"
+    delete:
+      summary: Delete collection poster image
+      description: |
+        Deletes a collection poster image by filename. Requires admin permissions.
+        
+        **Important: Sync-Based Behavior**
+        - Poster file is immediately deleted from storage
+        - Collections using this poster will revert to default during the next collection sync run
+        - Changes are not immediately visible in Plex until sync occurs
+        
+        **Security Features:**
+        - Admin-only access required
+        - Filename validation to prevent path traversal attacks
+        - Safe deletion with error handling
+      tags:
+        - settings
+      security:
+        - cookieAuth: []
+        - apiKeyAuth: []
+      parameters:
+        - name: filename
+          in: path
+          required: true
+          description: The filename of the poster image to delete
+          schema:
+            type: string
+            pattern: '^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\.(jpg|jpeg|png|webp)$'
+            example: "f47ac10b-58cc-4372-a567-0e02b2c3d479.jpg"
+      responses:
+        '200':
+          description: Poster deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Poster deleted successfully"
+        '400':
+          description: Invalid filename format
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Invalid filename"
+        '403':
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Insufficient permissions"
+        '404':
+          description: Poster not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Poster not found"
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Internal server error"
   /settings/tautulli:
     get:
       summary: Get Tautulli settings

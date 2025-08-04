@@ -4,17 +4,18 @@ import { getRepository } from '@server/datasource';
 import { MediaRequest } from '@server/entity/MediaRequest';
 import { User } from '@server/entity/User';
 import {
-  createOrUpdateCollection,
   getAdminUser,
   updateUserFilterSettings,
 } from '@server/lib/collectionsUtils';
 import { getSettings, type CollectionConfig } from '@server/lib/settings';
-import TautulliCollectionSync from '@server/lib/tautulliCollectionSync';
-import TraktCollectionSync from '@server/lib/traktCollectionSync';
+import { TautulliCollectionSync } from '@server/lib/collections/TautulliCollectionSync';
+import { OverseerrCollectionSync } from '@server/lib/collections/OverseerrCollectionSync';
+import { TraktCollectionSync } from '@server/lib/collections/TraktCollectionSync';
+import { TmdbCollectionSync } from '@server/lib/collections/TmdbCollectionSync';
+import { ImdbCollectionSync } from '@server/lib/collections/ImdbCollectionSync';
+import { LetterboxdCollectionSync } from '@server/lib/collections/LetterboxdCollectionSync';
 import {
   extractErrorMessage,
-  generateGlobalCollectionName,
-  getUserDisplayName,
 } from '@server/lib/utils/templateUtils';
 import logger from '@server/logger';
 import { IsNull, Not } from 'typeorm';
@@ -194,6 +195,11 @@ class CollectionsSync {
         (c) => c.type === 'overseerr'
       );
 
+      // Check if we have USER collections specifically (not global or server_owner) 
+      const hasUserCollections = collectionConfigs.some(
+        (c) => c.type === 'overseerr' && c.subtype === 'users'
+      );
+
       // Check for collections that require user label restrictions (users + server_owner)
       const hasUserLabelCollections = collectionConfigs.some(
         (c) =>
@@ -205,12 +211,16 @@ class CollectionsSync {
         requests = await this.getApprovedRequests();
         if (this.cancelled) return;
 
-        userCollections = this.organizeRequestsByUser(requests);
-        userCount = Object.keys(userCollections).length;
+        // Only organize requests by user if we have actual USER collections
+        // Global and server_owner collections don't need user-specific organization
+        if (hasUserCollections) {
+          userCollections = this.organizeRequestsByUser(requests);
+          userCount = Object.keys(userCollections).length;
 
-        // Update missing user titles for nickname support
-        await this.updateMissingUserTitles(userCollections);
-        if (this.cancelled) return;
+          // Update missing user titles for nickname support
+          await this.updateMissingUserTitles(userCollections);
+          if (this.cancelled) return;
+        }
       }
 
       // ALWAYS update user filters (for cleanup when no user label collections exist)
@@ -223,98 +233,199 @@ class CollectionsSync {
       }
       if (this.cancelled) return;
 
-      // Process each collection configuration
+      // Process collections by library for proper Plex home screen ordering
       let totalCreated = 0;
       let totalUpdated = 0;
       const statsBreakdown: { [key: string]: number } = {};
 
-      for (const config of collectionConfigs) {
-        if (this.cancelled) return;
+      // Expand configurations for individual libraries and group by library
+      const { LibraryConfigExpander } = await import('./collections/LibraryConfigExpander');
+      const appSettings = getSettings();
+      const expandedConfigs = LibraryConfigExpander.expandConfigurations(
+        collectionConfigs,
+        appSettings.plex.libraries
+      );
+      const libraryGroups = LibraryConfigExpander.groupByLibrary(expandedConfigs);
+      const processingOrder = LibraryConfigExpander.getProcessingOrder(libraryGroups);
 
-        logger.info(`Processing collection: ${config.name}`, {
+      // Process collections by library and order within each library
+      for (const [libraryId, libraryConfigs] of processingOrder) {
+        if (this.cancelled) return;
+        
+        const libraryName = appSettings.plex.libraries.find((lib: any) => lib.id === libraryId)?.name || libraryId;
+        logger.info(`Processing library: ${libraryName} (${libraryConfigs.length} collections)`, {
           label: 'Collections Sync',
-          configType: config.type,
-          configSubtype: config.subtype,
+          libraryId,
+          libraryName,
+          configCount: libraryConfigs.length
         });
 
-        let stats = { created: 0, updated: 0 };
+        // Process collections in the correct order from UI (respecting sortOrderHome)
+        const totalCollectionsInLibrary = libraryConfigs.length;
+        let previousConfigWasTrakt = false;
+        
+        for (const config of libraryConfigs) {
+          if (this.cancelled) return;
 
-        try {
-          switch (config.type) {
-            case 'overseerr':
-              if (config.subtype === 'users') {
-                stats = await this.processUserCollectionsFromConfig(
-                  config,
-                  userCollections,
-                  plexClient,
-                  allCollections,
-                  processedCollectionKeys
-                );
-              } else if (config.subtype === 'global') {
-                stats = await this.processGlobalCollectionFromConfig(
-                  config,
-                  requests,
-                  plexClient,
-                  allCollections,
-                  processedCollectionKeys
-                );
-              } else if (config.subtype === 'server_owner') {
-                stats = await this.processServerOwnerCollectionFromConfig(
-                  config,
-                  requests,
-                  plexClient,
-                  allCollections,
-                  processedCollectionKeys
-                );
-              }
-              break;
-
-            case 'tautulli':
-              stats = await this.processTautulliCollectionFromConfig(
-                config,
-                plexClient,
-                allCollections,
-                processedCollectionKeys
-              );
-              break;
-
-            case 'trakt':
-              stats = await this.processTraktCollectionFromConfig(
-                config,
-                plexClient,
-                allCollections,
-                processedCollectionKeys
-              );
-              break;
+          // Add small delay between API-heavy collections to avoid rate limiting
+          if (config.type === 'trakt' && previousConfigWasTrakt) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
           }
 
-          totalCreated += stats.created;
-          totalUpdated += stats.updated;
+          // Reduced verbosity - only log in debug mode
+          logger.debug(`Processing collection: ${config.name}`, {
+            label: 'Collections Sync',
+            configType: config.type,
+            configSubtype: config.subtype,
+            libraryId,
+            libraryName,
+            sortOrderHome: config.sortOrderHome,
+            sortOrderLibrary: config.sortOrderLibrary
+          });
 
-          const key = `${config.type}_${config.subtype}`;
-          statsBreakdown[key] =
-            (statsBreakdown[key] || 0) + stats.created + stats.updated;
-        } catch (error) {
-          logger.error(
-            `Failed to process collection ${config.name}: ${extractErrorMessage(
-              error
-            )}`,
-            {
-              label: 'Collections Sync',
-              configType: config.type,
-              configSubtype: config.subtype,
+          try {
+            let stats = { created: 0, updated: 0 };
+
+            switch (config.type) {
+              case 'overseerr':
+                {
+                  const configWithSorting = { ...config, _totalCollectionsInLibrary: totalCollectionsInLibrary };
+                  const overseerrSync = new OverseerrCollectionSync();
+                  
+                  // Use shared data approach for server owner collections to avoid re-fetching
+                  if (config.subtype === 'server_owner') {
+                    stats = await overseerrSync.processServerOwnerCollectionsFromConfig(
+                      configWithSorting,
+                      requests, // Use shared request data
+                      plexClient,
+                      allCollections,
+                      processedCollectionKeys
+                    );
+                  } else if (config.subtype === 'users') {
+                    stats = await overseerrSync.processUserCollectionsFromConfig(
+                      configWithSorting,
+                      userCollections, // Use shared user collections data
+                      plexClient,
+                      allCollections,
+                      processedCollectionKeys
+                    );
+                  } else {
+                    // For global collections, use the standard processConfiguration method
+                    stats = await overseerrSync.processConfiguration(
+                      configWithSorting,
+                      plexClient,
+                      allCollections,
+                      processedCollectionKeys
+                    );
+                  }
+                }
+                break;
+
+              case 'tautulli':
+                {
+                  const configWithSorting = { ...config, _totalCollectionsInLibrary: totalCollectionsInLibrary };
+                  const tautulliSync = new TautulliCollectionSync();
+                  stats = await tautulliSync.processCollections(
+                    [configWithSorting],
+                    plexClient,
+                    allCollections,
+                    processedCollectionKeys
+                  );
+                }
+                break;
+
+              case 'trakt':
+                {
+                  const configWithSorting = { ...config, _totalCollectionsInLibrary: totalCollectionsInLibrary };
+                  const traktSync = new TraktCollectionSync();
+                  stats = await traktSync.processCollections(
+                    [configWithSorting],
+                    plexClient,
+                    allCollections,
+                    processedCollectionKeys
+                  );
+                }
+                break;
+
+              case 'tmdb':
+                {
+                  const configWithSorting = { ...config, _totalCollectionsInLibrary: totalCollectionsInLibrary };
+                  const tmdbSync = new TmdbCollectionSync();
+                  stats = await tmdbSync.processCollections(
+                    [configWithSorting],
+                    plexClient,
+                    allCollections,
+                    processedCollectionKeys
+                  );
+                }
+                break;
+
+              case 'imdb':
+                {
+                  const configWithSorting = { ...config, _totalCollectionsInLibrary: totalCollectionsInLibrary };
+                  const imdbSync = new ImdbCollectionSync();
+                  stats = await imdbSync.processCollections(
+                    [configWithSorting],
+                    plexClient,
+                    allCollections,
+                    processedCollectionKeys
+                  );
+                }
+                break;
+
+              case 'letterboxd':
+                {
+                  const configWithSorting = { ...config, _totalCollectionsInLibrary: totalCollectionsInLibrary };
+                  const letterboxdSync = new LetterboxdCollectionSync();
+                  stats = await letterboxdSync.processCollections(
+                    [configWithSorting],
+                    plexClient,
+                    allCollections,
+                    processedCollectionKeys
+                  );
+                }
+                break;
+
+              default:
+                logger.warn(`Unknown collection type: ${config.type}`, {
+                  label: 'Collections Sync',
+                  configName: config.name,
+                  configType: config.type
+                });
+                break;
             }
-          );
+
+            totalCreated += stats.created;
+            totalUpdated += stats.updated;
+
+            const key = `${config.type}_${config.subtype}`;
+            statsBreakdown[key] = (statsBreakdown[key] || 0) + stats.created + stats.updated;
+          } catch (error) {
+            logger.error(
+              `Failed to process collection ${config.name}: ${extractErrorMessage(error)}`,
+              {
+                label: 'Collections Sync',
+                configType: config.type,
+                configSubtype: config.subtype,
+                libraryId,
+                libraryName
+              }
+            );
+          }
+          
+          // Track for rate limiting
+          previousConfigWasTrakt = config.type === 'trakt';
         }
       }
 
       if (this.cancelled) return;
 
       // Clean up orphaned collections that are no longer in the configuration
+      // Use expanded configs for cleanup to ensure proper collection removal
       const cleanupStats = await this.cleanupDisabledCollections(
         plexClient,
         existingOverseerrCollections,
-        collectionConfigs,
+        expandedConfigs,
         userCollections,
         processedCollectionKeys
       );
@@ -443,14 +554,50 @@ class CollectionsSync {
     if (this.cancelled) return;
 
     const userPlexIds = Object.keys(userCollections);
+    
+    // Check if server owner collections are configured
+    const settings = getSettings();
+    const hasServerOwnerCollections = settings.plex.collectionConfigs?.some(
+      (config: CollectionConfig) => config.type === 'overseerr' && config.subtype === 'server_owner'
+    );
+    
+    // If server owner collections exist, we need to update ALL users' filters, not just active users
+    let usersToUpdate: string[] = userPlexIds;
+    
+    if (hasServerOwnerCollections) {
+      // Get all users with Plex IDs to ensure server owner collections are hidden from everyone
+      const { getUsersWithPlexIds } = await import('@server/lib/collectionsUtils');
+      const allUsers = await getUsersWithPlexIds();
+      const allUserPlexIds = allUsers.map(user => user.plexId!.toString()).filter(Boolean);
+      
+      // Use all users when server owner collections exist
+      usersToUpdate = allUserPlexIds;
+      
+      logger.debug(`Server owner collections detected - updating filters for all ${allUserPlexIds.length} users (not just ${userPlexIds.length} active users)`, {
+        label: 'Collections Sync',
+        allUsersCount: allUserPlexIds.length,
+        activeUsersCount: userPlexIds.length
+      });
+    }
 
     let failureCount = 0;
 
-    for (const userPlexId of userPlexIds) {
+    // activeUserPlexIds should only contain users who have USER collections (not server owner)
+    // The server owner collection restriction is handled separately in updateUserFilterSettings
+    const activeUserPlexIds = userPlexIds;
+    
+    if (hasServerOwnerCollections) {
+      logger.debug(`Server owner collections exist - user filters will restrict OverseerrOwner collections automatically`, {
+        label: 'Collections Sync',
+        activeUserCount: activeUserPlexIds.length
+      });
+    }
+
+    for (const userPlexId of usersToUpdate) {
       if (this.cancelled) break;
 
       try {
-        await updateUserFilterSettings(userPlexId, userPlexIds);
+        await updateUserFilterSettings(userPlexId, activeUserPlexIds);
       } catch (error) {
         failureCount++;
         logger.warn(`Failed to update filter for user ${userPlexId}`, {
@@ -577,12 +724,20 @@ class CollectionsSync {
 
   /**
    * Organize requests by user and media type using Plex user IDs
+   * Note: Admin requests (user ID = 1) are excluded from regular user collections
+   * but are still available in the main requests array for server owner collections
    */
   private organizeRequestsByUser(requests: MediaRequest[]): UserCollections {
     const userCollections: UserCollections = {};
 
     for (const request of requests) {
       if (this.cancelled) break;
+
+      // Always skip admin user (server owner) requests in regular user collections
+      // Admin requests are handled separately via server_owner collection type
+      if (request.requestedBy.id === 1) {
+        continue;
+      }
 
       // Use the Plex ID from the user, not the Overseerr user ID
       const userPlexId = request.requestedBy.plexId;
@@ -627,810 +782,8 @@ class CollectionsSync {
     return userCollections;
   }
 
-  /**
-   * LEGACY: Process collections for all users with progress tracking
-   * @deprecated This method is kept for backwards compatibility. Use processUserCollectionsFromConfig instead.
-   */
-  private async processUserCollections(
-    userCollections: UserCollections,
-    plexClient: PlexAPI,
-    allCollections: any[]
-  ): Promise<{ created: number; updated: number }> {
-    let created = 0;
-    let updated = 0;
-    let failed = 0;
 
-    for (const [, collections] of Object.entries(userCollections)) {
-      if (this.cancelled) break;
-
-      const user = collections.user;
-
-      try {
-        // Process movies collection
-        if (collections.movies.length > 0) {
-          const result = await createOrUpdateCollection(
-            user,
-            collections.movies,
-            'movie',
-            plexClient,
-            allCollections
-          );
-          if (result.isNew) {
-            created++;
-          } else if (result.hasChanges) {
-            updated++;
-          }
-        }
-
-        // Process TV collection
-        if (collections.tv.length > 0) {
-          const result = await createOrUpdateCollection(
-            user,
-            collections.tv,
-            'tv',
-            plexClient,
-            allCollections
-          );
-          if (result.isNew) {
-            created++;
-          } else if (result.hasChanges) {
-            updated++;
-          }
-        }
-      } catch (error) {
-        failed++;
-        const username = getUserDisplayName(user);
-        logger.error(`Failed to process collections for user ${username}`, {
-          label: 'Collections Sync',
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-        // Continue with other users even if one fails
-      }
-    }
-
-    if (created > 0 || updated > 0 || failed > 0) {
-      const parts = [];
-      if (created > 0) parts.push(`${created} created`);
-      if (updated > 0) parts.push(`${updated} updated`);
-      if (failed > 0) parts.push(`${failed} failed`);
-
-      logger.info(`Collection processing completed: ${parts.join(', ')}`, {
-        label: 'Collections Sync',
-      });
-    } else {
-      logger.info('All collections are up to date', {
-        label: 'Collections Sync',
-      });
-    }
-
-    return { created, updated };
-  }
-
-  // COLLECTION MANAGEMENT (now handled by CollectionsManager)
-
-  /**
-   * LEGACY: Process global collection containing all users' requests
-   * @deprecated This method is kept for backwards compatibility. Use processGlobalCollectionFromConfig instead.
-   */
-  private async processGlobalCollection(
-    requests: MediaRequest[],
-    plexClient: PlexAPI,
-    allCollections: any[]
-  ): Promise<{ created: number; updated: number }> {
-    const settings = getSettings();
-
-    if (!settings.plex.globalCollectionEnabled) {
-      return { created: 0, updated: 0 };
-    }
-
-    const globalCollectionName = generateGlobalCollectionName();
-
-    // Organize all requests by media type (no user separation)
-    const movieItems: any[] = [];
-    const tvItems: any[] = [];
-
-    for (const request of requests) {
-      if (this.cancelled) break;
-
-      const ratingKey = request.is4k
-        ? request.media?.ratingKey4k
-        : request.media?.ratingKey;
-
-      if (!ratingKey) continue;
-
-      const collectionItem = {
-        ratingKey: ratingKey,
-        type: request.type,
-      };
-
-      if (request.type === 'movie') {
-        movieItems.push(collectionItem);
-      } else if (request.type === 'tv') {
-        tvItems.push(collectionItem);
-      }
-    }
-
-    let created = 0;
-    let updated = 0;
-
-    try {
-      // Create movie global collection if there are movie requests
-      if (movieItems.length > 0) {
-        // Create a fake user object for the global collection
-        const globalUser = {
-          id: 0,
-          plexId: null,
-          displayName: 'Everyone',
-          plexUsername: 'global',
-          plexTitle: 'Everyone',
-          username: 'global',
-          email: 'global@overseerr',
-        } as any;
-
-        const result = await createOrUpdateCollection(
-          globalUser,
-          movieItems,
-          'movie',
-          plexClient,
-          allCollections,
-          globalCollectionName,
-          'users', // Set visibility to users
-          true // isGlobalCollection
-        );
-
-        if (result.isNew) {
-          created++;
-        } else if (result.hasChanges) {
-          updated++;
-        }
-      }
-
-      // Create TV global collection if there are TV requests
-      if (tvItems.length > 0) {
-        const globalUser = {
-          id: 0,
-          plexId: null,
-          displayName: 'Everyone',
-          plexUsername: 'global',
-          plexTitle: 'Everyone',
-          username: 'global',
-          email: 'global@overseerr',
-        } as any;
-
-        const result = await createOrUpdateCollection(
-          globalUser,
-          tvItems,
-          'tv',
-          plexClient,
-          allCollections,
-          globalCollectionName,
-          'users', // Set visibility to users
-          true // isGlobalCollection
-        );
-
-        if (result.isNew) {
-          created++;
-        } else if (result.hasChanges) {
-          updated++;
-        }
-      }
-
-      if (created > 0 || updated > 0) {
-        logger.info(
-          `Global collection processing: ${created} created, ${updated} updated`,
-          {
-            label: 'Collections Sync',
-          }
-        );
-      }
-
-      return { created, updated };
-    } catch (error) {
-      logger.error(`Failed to process global collection: ${error}`, {
-        label: 'Collections Sync',
-        error: error instanceof Error ? error.message : 'Unknown error',
-      });
-      return { created: 0, updated: 0 };
-    }
-  }
-
-  /**
-   * LEGACY: Process Tautulli statistics collections
-   * @deprecated This method is kept for backwards compatibility. Use processTautulliCollectionFromConfig instead.
-   */
-  private async processTautulliCollections(
-    plexClient: PlexAPI,
-    allCollections: any[],
-    processedCollectionKeys?: Set<string>
-  ): Promise<{ created: number; updated: number }> {
-    const settings = getSettings();
-
-    // Check if any Tautulli collections are configured
-    const tautulliConfigs =
-      settings.plex.collectionConfigs?.filter(
-        (config) => config.type === 'tautulli'
-      ) || [];
-
-    if (tautulliConfigs.length === 0 || !settings.tautulli?.apiKey) {
-      return { created: 0, updated: 0 };
-    }
-
-    try {
-      const tautulliSync = new TautulliCollectionSync();
-      return await tautulliSync.processTautulliCollections(
-        tautulliConfigs,
-        plexClient,
-        allCollections,
-        processedCollectionKeys
-      );
-    } catch (error) {
-      logger.error(`Failed to process Tautulli collections: ${error}`, {
-        label: 'Collections Sync',
-        error: error instanceof Error ? error.message : 'Unknown error',
-      });
-      return { created: 0, updated: 0 };
-    }
-  }
-
-  /**
-   * LEGACY: Process Trakt trending collections
-   * @deprecated This method is kept for backwards compatibility. Use processTraktCollectionFromConfig instead.
-   */
-  private async processTraktCollections(
-    plexClient: PlexAPI,
-    allCollections: any[],
-    processedCollectionKeys?: Set<string>
-  ): Promise<{ created: number; updated: number }> {
-    const settings = getSettings();
-
-    // Check if any Trakt collections are configured
-    const traktConfigs =
-      settings.plex.collectionConfigs?.filter(
-        (config) => config.type === 'trakt'
-      ) || [];
-
-    const hasTraktApiKey = settings.trakt.apiKey;
-
-    if (traktConfigs.length === 0 || !hasTraktApiKey) {
-      return { created: 0, updated: 0 };
-    }
-
-    try {
-      const traktSync = new TraktCollectionSync();
-      return await traktSync.processTraktCollections(
-        traktConfigs,
-        plexClient,
-        allCollections,
-        processedCollectionKeys
-      );
-    } catch (error) {
-      logger.error(`Failed to process Trakt collections: ${error}`, {
-        label: 'Collections Sync',
-        error: error instanceof Error ? error.message : 'Unknown error',
-      });
-      return { created: 0, updated: 0 };
-    }
-  }
-
-  // CONFIGURATION-DRIVEN METHODS
-
-  /**
-   * Process user collections based on configuration
-   */
-  private async processUserCollectionsFromConfig(
-    config: CollectionConfig,
-    userCollections: UserCollections,
-    plexClient: PlexAPI,
-    allCollections: any[],
-    processedCollectionKeys?: Set<string>
-  ): Promise<{ created: number; updated: number }> {
-    if (config.type !== 'overseerr' || config.subtype !== 'users') {
-      return { created: 0, updated: 0 };
-    }
-
-    let created = 0;
-    let updated = 0;
-    let failed = 0;
-
-    for (const [, collections] of Object.entries(userCollections)) {
-      if (this.cancelled) break;
-
-      const user = collections.user;
-
-      try {
-        // Generate collection name from config template for this user
-        const { parseCollectionTemplate } = await import(
-          '@server/lib/utils/templateUtils'
-        );
-
-        // Process movies collection
-        if (collections.movies.length > 0) {
-          const movieCollectionName = parseCollectionTemplate(
-            config.template || '',
-            user,
-            'movie'
-          );
-          const result = await createOrUpdateCollection(
-            user,
-            collections.movies,
-            'movie',
-            plexClient,
-            allCollections,
-            movieCollectionName,
-            config.visibility,
-            false, // not global collection
-            undefined, // No custom label - will use default overseerr{plexId} format
-            processedCollectionKeys
-          );
-          if (result.isNew) {
-            created++;
-          } else if (result.hasChanges) {
-            updated++;
-          }
-        }
-
-        // Process TV collection
-        if (collections.tv.length > 0) {
-          const tvCollectionName = parseCollectionTemplate(
-            config.template || '',
-            user,
-            'tv'
-          );
-          const result = await createOrUpdateCollection(
-            user,
-            collections.tv,
-            'tv',
-            plexClient,
-            allCollections,
-            tvCollectionName,
-            config.visibility,
-            false, // not global collection
-            undefined, // No custom label - will use default overseerr{plexId} format
-            processedCollectionKeys
-          );
-          if (result.isNew) {
-            created++;
-          } else if (result.hasChanges) {
-            updated++;
-          }
-        }
-      } catch (error) {
-        failed++;
-        const username = getUserDisplayName(user);
-        logger.error(`Failed to process collections for user ${username}`, {
-          label: 'Collections Sync',
-          configName: config.name,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-        // Continue with other users even if one fails
-      }
-    }
-
-    if (created > 0 || updated > 0 || failed > 0) {
-      const parts = [];
-      if (created > 0) parts.push(`${created} created`);
-      if (updated > 0) parts.push(`${updated} updated`);
-      if (failed > 0) parts.push(`${failed} failed`);
-
-      logger.info(
-        `User collection processing (${config.name}): ${parts.join(', ')}`,
-        {
-          label: 'Collections Sync',
-          configName: config.name,
-        }
-      );
-    }
-
-    return { created, updated };
-  }
-
-  /**
-   * Process server owner collection based on configuration
-   */
-  private async processServerOwnerCollectionFromConfig(
-    config: CollectionConfig,
-    requests: MediaRequest[],
-    plexClient: PlexAPI,
-    allCollections: any[],
-    processedCollectionKeys?: Set<string>
-  ): Promise<{ created: number; updated: number }> {
-    if (config.type !== 'overseerr' || config.subtype !== 'server_owner') {
-      return { created: 0, updated: 0 };
-    }
-
-    // Get the admin user (server owner)
-    const adminUser = await getAdminUser();
-    if (!adminUser?.plexId) {
-      logger.warn(
-        'No admin user with Plex ID found for server owner collection',
-        {
-          label: 'Collections Sync',
-          configName: config.name,
-        }
-      );
-      return { created: 0, updated: 0 };
-    }
-
-    const settings = getSettings();
-
-    // Use custom templates if available, otherwise use the main template
-    const movieTemplate =
-      config.mediaType === 'both' && config.customMovieTemplate
-        ? config.customMovieTemplate
-        : config.template;
-    const tvTemplate =
-      config.mediaType === 'both' && config.customTVTemplate
-        ? config.customTVTemplate
-        : config.template;
-
-    // Collection names are generated dynamically during processing
-
-    // Filter requests to only include admin user's requests
-    const adminRequests = requests.filter(
-      (request) => request.requestedBy.id === adminUser.id
-    );
-
-    // Organize admin requests by media type
-    const movieItems: any[] = [];
-    const tvItems: any[] = [];
-
-    for (const request of adminRequests) {
-      if (this.cancelled) break;
-
-      const ratingKey = request.is4k
-        ? request.media?.ratingKey4k
-        : request.media?.ratingKey;
-
-      if (!ratingKey) continue;
-
-      const collectionItem = {
-        ratingKey: ratingKey,
-        type: request.type,
-      };
-
-      if (request.type === 'movie') {
-        movieItems.push(collectionItem);
-      } else if (request.type === 'tv') {
-        tvItems.push(collectionItem);
-      }
-    }
-
-    let created = 0;
-    let updated = 0;
-
-    try {
-      // Create movie server owner collection if there are movie requests and config allows movies
-      if (
-        movieItems.length > 0 &&
-        (config.mediaType === 'both' || config.mediaType === 'movie')
-      ) {
-        const movieCollectionName = movieTemplate
-          .replace('{domain}', 'Overseerr')
-          .replace(
-            '{nickname}',
-            adminUser.plexTitle || adminUser.displayName || 'Server Owner'
-          )
-          .replace('{servername}', settings.plex.name || 'Plex Server')
-          .replace('{subtype}', 'Server Owner Requests')
-          .replace('{mediaType}', 'Movie')
-          .replace('{customdays}', '30')
-          .replace('{days}', '30');
-
-        const result = await createOrUpdateCollection(
-          adminUser,
-          movieItems.slice(0, config.maxItems),
-          'movie',
-          plexClient,
-          allCollections,
-          movieCollectionName,
-          config.visibility,
-          false, // not a global collection, but server owner collection (special case)
-          `OverseerrOwner${adminUser.plexId}`, // Use consistent server owner label
-          processedCollectionKeys
-        );
-
-        if (result.isNew) {
-          created++;
-        } else if (result.hasChanges) {
-          updated++;
-        }
-      }
-
-      // Create TV server owner collection if there are TV requests and config allows TV
-      if (
-        tvItems.length > 0 &&
-        (config.mediaType === 'both' || config.mediaType === 'tv')
-      ) {
-        const tvCollectionName = tvTemplate
-          .replace('{domain}', 'Overseerr')
-          .replace(
-            '{nickname}',
-            adminUser.plexTitle || adminUser.displayName || 'Server Owner'
-          )
-          .replace('{servername}', settings.plex.name || 'Plex Server')
-          .replace('{subtype}', 'Server Owner Requests')
-          .replace('{mediaType}', 'TV Show')
-          .replace('{customdays}', '30')
-          .replace('{days}', '30');
-
-        const result = await createOrUpdateCollection(
-          adminUser,
-          tvItems.slice(0, config.maxItems),
-          'tv',
-          plexClient,
-          allCollections,
-          tvCollectionName,
-          config.visibility,
-          false, // not a global collection, but server owner collection (special case)
-          `OverseerrOwner${adminUser.plexId}`, // Use consistent server owner label
-          processedCollectionKeys
-        );
-
-        if (result.isNew) {
-          created++;
-        } else if (result.hasChanges) {
-          updated++;
-        }
-      }
-
-      if (created > 0 || updated > 0) {
-        logger.info(
-          `Server owner collection processing (${config.name}): ${created} created, ${updated} updated`,
-          {
-            label: 'Collections Sync',
-            configName: config.name,
-            adminUserId: adminUser.id,
-            adminPlexId: adminUser.plexId,
-          }
-        );
-      }
-
-      return { created, updated };
-    } catch (error) {
-      logger.error(
-        `Failed to process server owner collection ${
-          config.name
-        }: ${extractErrorMessage(error)}`,
-        {
-          label: 'Collections Sync',
-          configName: config.name,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        }
-      );
-      return { created: 0, updated: 0 };
-    }
-  }
-
-  /**
-   * Process global collection based on configuration
-   */
-  private async processGlobalCollectionFromConfig(
-    config: CollectionConfig,
-    requests: MediaRequest[],
-    plexClient: PlexAPI,
-    allCollections: any[],
-    processedCollectionKeys?: Set<string>
-  ): Promise<{ created: number; updated: number }> {
-    if (config.type !== 'overseerr' || config.subtype !== 'global') {
-      return { created: 0, updated: 0 };
-    }
-
-    // Settings will be used by template processing in createOrUpdateCollection
-
-    // Create a global user object for template processing
-    const globalUser = {
-      id: -1,
-      plexId: null,
-      plexTitle: 'Everyone',
-      displayName: 'Everyone',
-      username: 'global',
-      email: 'global@overseerr',
-    } as any;
-
-    // Organize all requests by media type (no user separation)
-    const movieItems: any[] = [];
-    const tvItems: any[] = [];
-
-    for (const request of requests) {
-      if (this.cancelled) break;
-
-      const ratingKey = request.is4k
-        ? request.media?.ratingKey4k
-        : request.media?.ratingKey;
-
-      if (!ratingKey) continue;
-
-      const collectionItem = {
-        ratingKey: ratingKey,
-        type: request.type,
-      };
-
-      if (request.type === 'movie') {
-        movieItems.push(collectionItem);
-      } else if (request.type === 'tv') {
-        tvItems.push(collectionItem);
-      }
-    }
-
-    let created = 0;
-    let updated = 0;
-
-    try {
-      // Import template parser for consistent name generation
-      const { parseCollectionTemplate } = await import(
-        '@server/lib/utils/templateUtils'
-      );
-
-      // Create movie global collection if there are movie requests and config allows movies
-      if (
-        movieItems.length > 0 &&
-        (config.mediaType === 'both' || config.mediaType === 'movie')
-      ) {
-        const movieCollectionName = parseCollectionTemplate(
-          config.template || '',
-          globalUser,
-          'movie'
-        );
-
-        const result = await createOrUpdateCollection(
-          globalUser,
-          movieItems.slice(0, config.maxItems),
-          'movie',
-          plexClient,
-          allCollections,
-          movieCollectionName,
-          config.visibility,
-          true, // isGlobalCollection
-          undefined, // Use default label format: OverseerrAllFilms
-          processedCollectionKeys
-        );
-
-        if (result.isNew) {
-          created++;
-        } else if (result.hasChanges) {
-          updated++;
-        }
-      }
-
-      // Create TV global collection if there are TV requests and config allows TV
-      if (
-        tvItems.length > 0 &&
-        (config.mediaType === 'both' || config.mediaType === 'tv')
-      ) {
-        const tvCollectionName = parseCollectionTemplate(
-          config.template || '',
-          globalUser,
-          'tv'
-        );
-
-        const result = await createOrUpdateCollection(
-          globalUser,
-          tvItems.slice(0, config.maxItems),
-          'tv',
-          plexClient,
-          allCollections,
-          tvCollectionName,
-          config.visibility,
-          true, // isGlobalCollection
-          undefined, // Use default label format: OverseerrAllTV
-          processedCollectionKeys
-        );
-
-        if (result.isNew) {
-          created++;
-        } else if (result.hasChanges) {
-          updated++;
-        }
-      }
-
-      if (created > 0 || updated > 0) {
-        logger.info(
-          `Global collection processing (${config.name}): ${created} created, ${updated} updated`,
-          {
-            label: 'Collections Sync',
-            configName: config.name,
-          }
-        );
-      }
-
-      return { created, updated };
-    } catch (error) {
-      logger.error(
-        `Failed to process global collection (${config.name}): ${error}`,
-        {
-          label: 'Collections Sync',
-          configName: config.name,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        }
-      );
-      return { created: 0, updated: 0 };
-    }
-  }
-
-  /**
-   * Process Tautulli collection based on configuration
-   */
-  private async processTautulliCollectionFromConfig(
-    config: CollectionConfig,
-    plexClient: PlexAPI,
-    allCollections: any[],
-    processedCollectionKeys?: Set<string>
-  ): Promise<{ created: number; updated: number }> {
-    if (config.type !== 'tautulli') {
-      return { created: 0, updated: 0 };
-    }
-
-    const settings = getSettings();
-    if (!settings.tautulli?.apiKey) {
-      logger.warn(
-        'Tautulli API key not configured, skipping Tautulli collection',
-        {
-          label: 'Collections Sync',
-          configName: config.name,
-        }
-      );
-      return { created: 0, updated: 0 };
-    }
-
-    try {
-      const tautulliSync = new TautulliCollectionSync();
-      return await tautulliSync.processTautulliCollections(
-        [config], // Pass single config as array
-        plexClient,
-        allCollections,
-        processedCollectionKeys
-      );
-    } catch (error) {
-      logger.error(
-        `Failed to process Tautulli collection (${config.name}): ${error}`,
-        {
-          label: 'Collections Sync',
-          configName: config.name,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        }
-      );
-      return { created: 0, updated: 0 };
-    }
-  }
-
-  /**
-   * Process Trakt collection based on configuration
-   */
-  private async processTraktCollectionFromConfig(
-    config: CollectionConfig,
-    plexClient: PlexAPI,
-    allCollections: any[],
-    processedCollectionKeys?: Set<string>
-  ): Promise<{ created: number; updated: number }> {
-    if (config.type !== 'trakt') {
-      return { created: 0, updated: 0 };
-    }
-
-    const settings = getSettings();
-    if (!settings.trakt.apiKey) {
-      return { created: 0, updated: 0 };
-    }
-
-    try {
-      const traktSync = new TraktCollectionSync();
-      return await traktSync.processTraktCollections(
-        [config], // Pass single config as array
-        plexClient,
-        allCollections,
-        processedCollectionKeys
-      );
-    } catch (error) {
-      logger.error(
-        `Failed to process Trakt collection (${config.name}): ${error}`,
-        {
-          label: 'Collections Sync',
-          configName: config.name,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        }
-      );
-      return { created: 0, updated: 0 };
-    }
-  }
+  // COLLECTION CLEANUP METHODS
 
   /**
    * Clean up collections that no longer have active configurations
@@ -1454,6 +807,12 @@ class CollectionsSync {
             return `overseerrtautulli${c.id}`;
           case 'trakt':
             return `overseerrtrakt${c.id}`;
+          case 'tmdb':
+            return `overseerrtmdb${c.id}`;
+          case 'imdb':
+            return `overseerrimdb${c.id}`;
+          case 'letterboxd':
+            return `overseerrletterboxd${c.id}`;
           default:
             return `overseerr${c.type}${c.id}`;
         }

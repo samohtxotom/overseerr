@@ -14,7 +14,6 @@ import type {
 import { scheduledJobs } from '@server/job/schedule';
 import type { AvailableCacheIds } from '@server/lib/cache';
 import cacheManager from '@server/lib/cache';
-import collectionsSync from '@server/lib/collectionsSync';
 import ImageProxy from '@server/lib/imageproxy';
 import { Permission } from '@server/lib/permissions';
 import { plexFullScanner } from '@server/lib/scanners/plex';
@@ -118,7 +117,7 @@ settingsRoutes.post('/plex', async (req, res, next) => {
       settings.plex.collectionsEverEnabled = true;
     }
 
-    // Note: Collections sync is now handled by scheduled job (every 15 minutes)
+    // Note: Collections sync is now handled by scheduled job (every 12 hours)
     // or manual "Save & Run" button - no auto-trigger on enable
 
     const plexClient = new PlexAPI({ plexToken: admin.plexToken });
@@ -132,43 +131,16 @@ settingsRoutes.post('/plex', async (req, res, next) => {
     settings.plex.machineId = result.MediaContainer.machineIdentifier;
     settings.plex.name = result.MediaContainer.friendlyName;
 
-    // Handle purge operations - when disabling collections
-    let purgeResult = null;
-    if (req.body.purgeCollections || req.body.purgeUserLabels) {
-      try {
-        purgeResult = await collectionsSync.purgeAllData();
-        logger.info(
-          `Purge completed: ${purgeResult.collectionsDeleted} collections deleted, ${purgeResult.usersProcessed} users processed (${purgeResult.labelsSuccessful} successful, ${purgeResult.labelsFailed} failed)`,
-          {
-            label: 'Settings API',
-          }
-        );
-      } catch (error) {
-        logger.error('Error in purge operation', {
-          label: 'Settings API',
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-        throw new Error(
-          `Failed to purge data: ${
-            error instanceof Error ? error.message : 'Unknown error'
-          }`
-        );
-      }
-    }
 
     settings.save();
 
     // Collections sync now only triggered by:
-    // 1. Scheduled job (every 15 minutes) when collections are enabled
+    // 1. Scheduled job (every 12 hours) when collections are enabled
     // 2. Manual "Save & Run" button in UI
 
-    // Include purge results if any
+    // Return the updated Plex settings
     const response = {
       ...settings.plex,
-      ...(purgeResult && {
-        status: 'success',
-        ...purgeResult,
-      }),
     };
 
     return res.status(200).json(response);

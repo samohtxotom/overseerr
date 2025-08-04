@@ -396,7 +396,22 @@ class PlexAPI {
       });
     }
 
-    return allCollections.sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
+    // DEBUG: Log collection order and properties to understand Plex ordering
+    logger.debug('Plex collections order debug:', {
+      label: 'Plex API',
+      collections: allCollections.map((c, index) => ({
+        index,
+        title: c.title,
+        ratingKey: c.ratingKey,
+        addedAt: c.addedAt,
+        updatedAt: c.updatedAt,
+        titleSort: c.titleSort,
+        labels: c.labels
+      }))
+    });
+    
+    // Return collections in Plex's natural order - don't force addedAt sorting
+    return allCollections;
   }
 
   public async getCollectionMetadata(
@@ -1126,6 +1141,70 @@ class PlexAPI {
           shared,
         }
       );
+    }
+  }
+
+  /**
+   * Upload and set a custom poster for a collection
+   */
+  public async updateCollectionPoster(
+    collectionRatingKey: string,
+    posterPath: string
+  ): Promise<void> {
+    try {
+      const fs = await import('fs');
+      const path = await import('path');
+      
+      // Read the poster file
+      const posterBuffer = await fs.promises.readFile(posterPath);
+      const fileExtension = path.extname(posterPath).toLowerCase();
+      
+      // First, we need to upload the image to Plex's photo library
+      // This creates a photo key that we can then use to set as the poster
+      const uploadEndpoint = '/photo/:/transcode';
+      const uploadParams = new URLSearchParams({
+        width: '500',
+        height: '750',
+        minSize: '1',
+        url: `data:image/${fileExtension === '.png' ? 'png' : 'jpeg'};base64,${posterBuffer.toString('base64')}`
+      });
+      
+      // Upload the image data
+      const uploadResponse = await this.plexClient.query(
+        `${uploadEndpoint}?${uploadParams.toString()}`
+      );
+      
+      // Extract the photo key from the response
+      const photoKey = uploadResponse?.MediaContainer?.Metadata?.[0]?.key;
+      if (!photoKey) {
+        throw new Error('Failed to upload poster to Plex - no photo key returned');
+      }
+      
+      // Now set this photo as the collection's poster using the photo key
+      const setPosterEndpoint = `/library/metadata/${collectionRatingKey}/poster`;
+      const setPosterParams = new URLSearchParams({
+        url: photoKey
+      });
+      
+      await this.plexClient.query(`${setPosterEndpoint}?${setPosterParams.toString()}`);
+
+      logger.info(`Successfully uploaded and set poster for collection ${collectionRatingKey}`, {
+        label: 'Plex API',
+        collectionRatingKey,
+        posterPath,
+        photoKey,
+      });
+    } catch (error) {
+      logger.error(
+        `Error updating poster for collection ${collectionRatingKey}`,
+        {
+          label: 'Plex API',
+          error: error instanceof Error ? error.message : String(error),
+          collectionRatingKey,
+          posterPath,
+        }
+      );
+      throw error;
     }
   }
 

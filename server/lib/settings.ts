@@ -6,11 +6,11 @@ import webpush from 'web-push';
 import { Permission } from './permissions';
 
 export interface Library {
-  id: string;
-  name: string;
-  enabled: boolean;
-  type: 'show' | 'movie';
-  lastScan?: number;
+  readonly id: string;
+  readonly name: string;
+  readonly enabled: boolean;
+  readonly type: 'show' | 'movie';
+  readonly lastScan?: number;
 }
 
 export interface Region {
@@ -26,29 +26,74 @@ export interface Language {
 }
 
 export interface CollectionConfig {
-  id: number;
-  name: string;
-  type: 'overseerr' | 'tautulli' | 'trakt';
-  subtype: string; // Specific option like 'users', 'most_popular_plays', 'most_popular_duration', etc.
-  template: string;
-  customMovieTemplate?: string; // Custom template for movie collections when mediaType is 'both'
-  customTVTemplate?: string; // Custom template for TV collections when mediaType is 'both'
-  visibility: 'users' | 'users_admin' | 'admin' | 'none';
-  maxItems: number;
-  mediaType?: 'movie' | 'tv' | 'both';
-  period?: 'week' | 'month'; // Legacy field, kept for backwards compatibility
-  customDays?: number; // Number of days for Tautulli collections (required for Tautulli type)
-  sortOrder?: number;
-  traktStatType?: 'trending' | 'popular' | 'watched';
-  tautulliStatType?: 'plays' | 'duration'; // Tautulli stat type: plays or duration
-  searchMissingMovies?: boolean; // Auto-request missing movies
-  searchMissingTV?: boolean; // Auto-request missing TV shows
-  autoApproveMovies?: boolean; // Auto-approve movie requests
-  autoApproveTV?: boolean; // Auto-approve TV show requests
-  maxSeasonsToRequest?: number; // Max seasons for auto-approval (TV shows with more seasons require manual approval)
+  readonly id: number;
+  readonly name: string;
+  readonly type: 'overseerr' | 'tautulli' | 'trakt' | 'tmdb' | 'imdb' | 'letterboxd';
+  readonly subtype: string; // Specific option like 'users', 'most_popular_plays', 'most_popular_duration', etc.
+  readonly template: string;
+  readonly customMovieTemplate?: string; // Custom template for movie collections when mediaType is 'both'
+  readonly customTVTemplate?: string; // Custom template for TV collections when mediaType is 'both'
+  readonly visibilityConfig: {
+    usersHome: boolean;
+    serverOwnerHome: boolean;
+    libraryRecommended: boolean;
+    libraryTabOnly: boolean;
+  };
+  readonly maxItems: number;
+  readonly mediaType?: 'movie' | 'tv' | 'both';
+  readonly customDays?: number; // Number of days for Tautulli collections (required for Tautulli type)
+  readonly libraryId?: string; // Selected library ID ('all' for all enabled libraries)
+  readonly libraryName?: string; // Selected library name for display
+  readonly sortOrderHome?: number; // Order for Plex home screen (creation time based)
+  readonly sortOrderLibrary?: number; // Order for Plex library tab (sortTitle based)
+  readonly parentConfigId?: number; // Reference to original config when expanded from 'all' libraries
+  readonly isExpandedConfig?: boolean; // True if this config was auto-generated from a parent 'all' config
+  // Library-specific sort orders (dynamic keys like "1_sortOrderHome", "2_sortOrderHome", "1_sortOrderLibrary", "2_sortOrderLibrary")
+  [key: string]: any; // Allows dynamic library-specific sort order keys
+  readonly traktStatType?: 'trending' | 'popular' | 'watched';
+  readonly tautulliStatType?: 'plays' | 'duration'; // Tautulli stat type: plays or duration
+  readonly searchMissingMovies?: boolean; // Auto-request missing movies
+  readonly searchMissingTV?: boolean; // Auto-request missing TV shows
+  readonly autoApproveMovies?: boolean; // Auto-approve movie requests
+  readonly autoApproveTV?: boolean; // Auto-approve TV show requests
+  readonly maxSeasonsToRequest?: number; // Max seasons for auto-approval (TV shows with more seasons require manual approval)
   // Trakt custom list fields
-  traktCustomListUrl?: string; // Custom Trakt list URL (e.g., https://trakt.tv/users/username/lists/list-name)
-  traktReverseOrder?: boolean; // Reverse the order of items from the list
+  readonly traktCustomListUrl?: string; // Custom Trakt list URL (e.g., https://trakt.tv/users/username/lists/list-name)
+  // TMDb custom list fields
+  readonly tmdbCustomListUrl?: string; // Custom TMDb list/collection URL (e.g., https://www.themoviedb.org/list/123456)
+  // IMDb custom list fields
+  readonly imdbCustomListUrl?: string; // Custom IMDb list URL (e.g., https://www.imdb.com/list/ls123456789/)
+  // Letterboxd custom list fields
+  readonly letterboxdCustomListUrl?: string; // Custom Letterboxd list URL (e.g., https://letterboxd.com/username/list/list-name/)
+  // Generic ordering options (applicable to all collection types)
+  readonly reverseOrder?: boolean; // Reverse the order of items from the source
+  readonly randomizeOrder?: boolean; // Randomize the order of items (mutually exclusive with reverseOrder)
+  // Poster settings
+  readonly customPoster?: string; // Path to custom poster image file
+  // Time restriction settings
+  readonly timeRestriction?: {
+    readonly alwaysActive: boolean; // If true, collection is always active (default)
+    readonly removeFromPlexWhenInactive?: boolean; // If true, completely remove from Plex when inactive (old behavior)
+    readonly inactiveVisibilityConfig?: {
+      usersHome: boolean;
+      serverOwnerHome: boolean;
+      libraryRecommended: boolean;
+      libraryTabOnly: boolean;
+    }; // Visibility settings to use when collection is inactive (only used if removeFromPlexWhenInactive is false)
+    readonly dateRanges?: readonly {
+      readonly startDate: string; // DD-MM format (e.g., "05-12" for 5th December)
+      readonly endDate: string; // DD-MM format (e.g., "26-12" for 26th December)
+    }[];
+    readonly weeklySchedule?: {
+      readonly monday: boolean;
+      readonly tuesday: boolean;
+      readonly wednesday: boolean;
+      readonly thursday: boolean;
+      readonly friday: boolean;
+      readonly saturday: boolean;
+      readonly sunday: boolean;
+    };
+  };
 }
 
 export interface PlexSettings {

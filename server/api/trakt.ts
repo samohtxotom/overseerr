@@ -49,9 +49,29 @@ export interface TraktListResponse {
   rank: number;
   id: number;
   listed_at: string;
-  type: 'movie' | 'show';
+  type: 'movie' | 'show' | 'season' | 'episode';
   movie?: TraktMovie;
   show?: TraktShow;
+  season?: {
+    number: number;
+    ids: {
+      trakt: number;
+      tvdb: number;
+      tmdb: number;
+    };
+    show?: TraktShow;
+  };
+  episode?: {
+    season: number;
+    number: number;
+    title: string;
+    ids: {
+      trakt: number;
+      tvdb: number;
+      tmdb: number;
+    };
+    show?: TraktShow;
+  };
 }
 
 class TraktAPI {
@@ -69,18 +89,52 @@ class TraktAPI {
     });
   }
 
+  private async retryRequest<T>(
+    requestFn: () => Promise<T>,
+    maxRetries = 3,
+    delay = 1000
+  ): Promise<T> {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        return await requestFn();
+      } catch (error) {
+        if (attempt === maxRetries) {
+          throw error;
+        }
+        
+        // Check if it's a retryable error (5xx or network errors)
+        const isRetryable = error.response?.status >= 500 || !error.response;
+        if (!isRetryable) {
+          throw error;
+        }
+        
+        logger.debug(`Trakt API request failed, retrying in ${delay}ms (attempt ${attempt}/${maxRetries})`, {
+          label: 'Trakt API',
+          error: error.message,
+          status: error.response?.status,
+        });
+        
+        await new Promise(resolve => setTimeout(resolve, delay));
+        delay *= 2; // Exponential backoff
+      }
+    }
+    throw new Error('Max retries exceeded');
+  }
+
   public async getTrending(
     mediaType: 'movies' | 'shows',
     limit = 20
   ): Promise<TraktTrendingResponse[]> {
     try {
-      const response = await this.axios.get<TraktTrendingResponse[]>(
-        `/${mediaType}/trending`,
-        {
-          params: { limit },
-        }
-      );
-      return response.data;
+      return await this.retryRequest(async () => {
+        const response = await this.axios.get<TraktTrendingResponse[]>(
+          `/${mediaType}/trending`,
+          {
+            params: { limit },
+          }
+        );
+        return response.data;
+      });
     } catch (e) {
       logger.error(
         'Something went wrong fetching trending content from Trakt',
@@ -167,13 +221,15 @@ class TraktAPI {
 
       const [, username, listSlug] = urlMatch;
 
-      const response = await this.axios.get<TraktListResponse[]>(
-        `/users/${username}/lists/${listSlug}/items`,
-        {
-          params: { limit },
-        }
-      );
-      return response.data;
+      return await this.retryRequest(async () => {
+        const response = await this.axios.get<TraktListResponse[]>(
+          `/users/${username}/lists/${listSlug}/items`,
+          {
+            params: { limit },
+          }
+        );
+        return response.data;
+      });
     } catch (e) {
       logger.error('Something went wrong fetching custom list from Trakt', {
         label: 'Trakt API',
