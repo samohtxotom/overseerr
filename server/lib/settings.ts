@@ -42,8 +42,10 @@ export interface CollectionConfig {
   readonly maxItems: number;
   readonly mediaType?: 'movie' | 'tv' | 'both';
   readonly customDays?: number; // Number of days for Tautulli collections (required for Tautulli type)
-  readonly libraryId?: string; // Selected library ID ('all' for all enabled libraries)
-  readonly libraryName?: string; // Selected library name for display
+  readonly libraryId?: string | string[]; // Selected library ID(s) - single string for backward compatibility, array for multiple selection
+  readonly libraryIds?: string[]; // New: Array of selected library IDs (replaces single libraryId)
+  readonly libraryName?: string; // Selected library name for display (for single library)
+  readonly libraryNames?: string[]; // New: Array of selected library names for display (for multiple libraries)
   readonly sortOrderHome?: number; // Order for Plex home screen (creation time based)
   readonly sortOrderLibrary?: number; // Order for Plex library tab (sortTitle based)
   readonly parentConfigId?: number; // Reference to original config when expanded from 'all' libraries
@@ -96,6 +98,25 @@ export interface CollectionConfig {
   };
 }
 
+/**
+ * Configuration for Plex built-in hubs (Recently Added, Continue Watching, etc.)
+ */
+export interface PlexHubConfig {
+  id: string; // hub identifier + library ID (e.g., "1-movie.recentlyadded")
+  hubIdentifier: string; // Plex hub identifier (e.g., "movie.recentlyadded")
+  name: string; // Display name (e.g., "Recently Added Movies")
+  libraryId: string; // Library ID this hub belongs to
+  libraryName: string; // Library display name
+  mediaType: 'movie' | 'tv'; // Media type (hubs are always single type)
+  sortOrderLibrary: number; // Position in library
+  visibilityConfig: {
+    usersHome: boolean;
+    serverOwnerHome: boolean;
+    libraryRecommended: boolean;
+    libraryTabOnly: boolean;
+  };
+}
+
 export interface PlexSettings {
   name: string;
   machineId?: string;
@@ -109,7 +130,8 @@ export interface PlexSettings {
   collectionTemplate?: string;
   collectionVisibility?: 'none' | 'all' | 'admin' | 'shared';
   globalCollectionEnabled?: boolean;
-  collectionConfigs?: CollectionConfig[];
+  collectionConfigs?: CollectionConfig[]; // Overseerr-created collections
+  hubConfigs?: PlexHubConfig[]; // Plex built-in hub configurations
   usersHomeUnlocked?: boolean; // Secret unlock for Users Home collections
 }
 

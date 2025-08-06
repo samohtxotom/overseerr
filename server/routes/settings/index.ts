@@ -33,6 +33,7 @@ import path from 'path';
 import semver from 'semver';
 import { URL } from 'url';
 import collectionsRoutes from './collections';
+import hubsRoutes from './hubs';
 import notificationRoutes from './notifications';
 import radarrRoutes from './radarr';
 import sonarrRoutes from './sonarr';
@@ -41,6 +42,7 @@ const settingsRoutes = Router();
 
 settingsRoutes.use('/notifications', notificationRoutes);
 settingsRoutes.use('/plex/collections', collectionsRoutes);
+settingsRoutes.use('/hubs', hubsRoutes);
 settingsRoutes.use('/radarr', radarrRoutes);
 settingsRoutes.use('/sonarr', sonarrRoutes);
 settingsRoutes.use('/discover', discoverSettingRoutes);
@@ -258,6 +260,39 @@ settingsRoutes.get('/plex/library', async (req, res) => {
   }));
   settings.save();
   return res.status(200).json(settings.plex.libraries);
+});
+
+settingsRoutes.get('/plex/libraries', async (req, res) => {
+  try {
+    const userRepository = getRepository(User);
+    const admin = await userRepository.findOne({
+      select: { id: true, plexToken: true },
+      where: { id: 1 },
+    });
+
+    if (!admin?.plexToken) {
+      return res.status(400).json({ error: 'No admin Plex token found' });
+    }
+
+    const plexapi = new PlexAPI({ plexToken: admin.plexToken });
+    const libraries = await plexapi.getLibraries();
+
+    // Return clean library data directly from Plex
+    const cleanLibraries = libraries.map(lib => ({
+      id: lib.key,
+      name: lib.title,
+      type: lib.type, // 'movie' or 'show'
+      enabled: true, // All Plex libraries are considered available for hub management
+    }));
+
+    return res.status(200).json(cleanLibraries);
+  } catch (error) {
+    logger.error('Failed to fetch Plex libraries', {
+      label: 'Settings Routes',
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return res.status(500).json({ error: 'Failed to fetch Plex libraries' });
+  }
 });
 
 settingsRoutes.get('/plex/sync', (_req, res) => {

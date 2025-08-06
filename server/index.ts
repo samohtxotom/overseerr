@@ -175,7 +175,7 @@ app
     server.use(
       OpenApiValidator.middleware({
         apiSpec: API_SPEC_PATH,
-        validateRequests: true,
+        validateRequests: true, // Re-enabled after fixing schema
       })
     );
     /**

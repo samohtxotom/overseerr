@@ -896,7 +896,6 @@ const SettingsPlex = ({ onComplete }: SettingsPlexProps) => {
             {/* Collections Management */}
             <CollectionSettings
               collectionConfigs={collectionConfigs}
-              libraries={data?.libraries || []}
               onUpdateConfigs={setCollectionConfigs}
             />
 

@@ -1,9 +1,11 @@
 import Modal from '@app/components/Common/Modal';
 import globalMessages from '@app/i18n/globalMessages';
 import { Transition } from '@headlessui/react';
+import { ChevronDownIcon } from '@heroicons/react/24/solid';
 import { Field, Formik } from 'formik';
 import { defineMessages, useIntl } from 'react-intl';
-import { useState } from 'react';
+import { useState, useRef } from 'react';
+import useClickOutside from '@app/hooks/useClickOutside';
 import { useToasts } from 'react-toast-notifications';
 import useSWR from 'swr';
 import * as Yup from 'yup';
@@ -33,6 +35,128 @@ const messages = defineMessages({
   preview: 'Preview:',
   alwaysActive: 'Always Active (no time restrictions)',
 });
+
+// Library Checkbox Dropdown Component
+interface LibraryCheckboxDropdownProps {
+  selectedLibraries: string[];
+  allLibraries: { id: string; name: string; type: string; enabled: boolean }[];
+  onSelectionChange: (selectedIds: string[]) => void;
+  disabled?: boolean;
+  error?: string;
+  showAllLibrariesOption?: boolean; // Control whether to show "All Libraries" option
+}
+
+const LibraryCheckboxDropdown = ({
+  selectedLibraries,
+  allLibraries,
+  onSelectionChange,
+  disabled = false,
+  error,
+  showAllLibrariesOption = true
+}: LibraryCheckboxDropdownProps) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  useClickOutside(dropdownRef, () => setIsOpen(false));
+
+  const allLibrariesSelected = selectedLibraries.includes('all');
+  const enabledLibraries = allLibraries.filter(lib => lib.enabled);
+
+  const handleAllLibrariesChange = (checked: boolean) => {
+    if (checked) {
+      onSelectionChange(['all']);
+    } else {
+      onSelectionChange([]);
+    }
+  };
+
+  const handleLibraryChange = (libraryId: string, checked: boolean) => {
+    if (allLibrariesSelected) return; // Don't allow individual changes when "All Libraries" is selected
+
+    if (checked) {
+      onSelectionChange([...selectedLibraries.filter(id => id !== 'all'), libraryId]);
+    } else {
+      onSelectionChange(selectedLibraries.filter(id => id !== libraryId));
+    }
+  };
+
+  const getDisplayText = () => {
+    if (selectedLibraries.length === 0) {
+      return 'Select Libraries...';
+    }
+    if (allLibrariesSelected) {
+      return 'All Libraries';
+    }
+    if (selectedLibraries.length === 1) {
+      const library = enabledLibraries.find(lib => lib.id === selectedLibraries[0]);
+      return library ? library.name : '1 library selected';
+    }
+    return `${selectedLibraries.length} libraries selected`;
+  };
+
+  return (
+    <div className="relative" ref={dropdownRef}>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setIsOpen(!isOpen)}
+        className={`form-input flex w-full items-center justify-between text-left ${
+          disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
+        } ${error ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : ''}`}
+      >
+        <span className={selectedLibraries.length === 0 ? 'text-gray-400' : 'text-white'}>
+          {getDisplayText()}
+        </span>
+        <ChevronDownIcon className={`ml-2 h-4 w-4 text-gray-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+      </button>
+
+      <Transition
+        show={isOpen}
+        enter="transition ease-out duration-100"
+        enterFrom="opacity-0 scale-95"
+        enterTo="opacity-100 scale-100"
+        leave="transition ease-in duration-75"
+        leaveFrom="opacity-100 scale-100"
+        leaveTo="opacity-0 scale-95"
+      >
+        <div className="absolute z-50 mt-1 w-full rounded-md border border-gray-600 bg-gray-700 shadow-lg ring-1 ring-black ring-opacity-5">
+          <div className="py-1">
+            {/* All Libraries Option - conditionally shown */}
+            {showAllLibrariesOption && (
+              <label className="flex items-center px-4 py-2 text-sm hover:bg-gray-600 cursor-pointer transition-colors">
+                <input
+                  type="checkbox"
+                  checked={allLibrariesSelected}
+                  onChange={(e) => handleAllLibrariesChange(e.target.checked)}
+                  className="form-checkbox mr-3"
+                />
+                <span className="text-white font-medium">All Libraries</span>
+              </label>
+            )}
+
+            {/* Individual Library Options */}
+            {enabledLibraries.map((library) => (
+              <label
+                key={library.id}
+                className={`flex items-center px-4 py-2 text-sm hover:bg-gray-600 cursor-pointer transition-colors ${
+                  allLibrariesSelected ? 'opacity-50' : ''
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedLibraries.includes(library.id)}
+                  onChange={(e) => handleLibraryChange(library.id, e.target.checked)}
+                  disabled={allLibrariesSelected}
+                  className={`form-checkbox mr-3 ${allLibrariesSelected ? 'opacity-50' : ''}`}
+                />
+                <span className="text-white">{library.name}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+      </Transition>
+    </div>
+  );
+};
 
 const CollectionConfigForm = ({
   config,
@@ -177,7 +301,7 @@ const CollectionConfigForm = ({
   const CollectionConfigSchema = Yup.object().shape({
     type: Yup.string().required('Collection type is required'),
     subtype: Yup.string().required('Collection sub-type is required'),
-    libraryId: Yup.string().required('Library selection is required').test('not-empty', 'Please select a library', value => value !== ''),
+    libraryIds: Yup.array().of(Yup.string()).min(1, 'Please select at least one library').required('Please select at least one library'),
     // Template validation - only check when it exists
     template: Yup.string()
       .test('not-fetch-title', 'Please fetch the title from the URL first', value => !value || value !== 'fetch-title'),
@@ -264,6 +388,7 @@ const CollectionConfigForm = ({
     { value: 'letterboxd', label: 'Letterboxd Lists' },
     { value: 'tmdb', label: 'TMDb Lists' },
     { value: 'imdb', label: 'IMDb Lists' },
+    { value: 'plex', label: 'Plex Built-in Hubs' },
   ];
 
   const getSubtypeOptions = (type: string): SubtypeOption[] => {
@@ -318,6 +443,20 @@ const CollectionConfigForm = ({
       case 'letterboxd':
         return [
           { value: 'custom', label: 'Custom List' },
+        ];
+      case 'plex':
+        return [
+          { value: 'movie.recentlyadded', label: 'Recently Added Movies', description: 'Built-in Recently Added Movies hub' },
+          { value: 'movie.recentlyreleased', label: 'Recently Released Movies', description: 'Built-in Recently Released Movies hub' },
+          { value: 'movie.curated', label: 'Seasonal Movies', description: 'Built-in Seasonal Movies hub' },
+          { value: 'movie.topunwatched', label: 'Top Unwatched Movies', description: 'Built-in Top Unwatched Movies hub' },
+          { value: 'movie.recentlyviewed', label: 'Recently Watched Movies', description: 'Built-in Recently Watched Movies hub' },
+          { value: 'tv.recentlyadded', label: 'Recently Added TV', description: 'Built-in Recently Added TV Shows hub' },
+          { value: 'tv.recentlyaired', label: 'Recently Released Episodes', description: 'Built-in Recently Released Episodes hub' },
+          { value: 'tv.startwatching', label: 'Start Watching', description: 'Built-in Continue Watching TV Shows hub' },
+          { value: 'tv.rediscover', label: 'Rediscover', description: 'Built-in Rediscover TV Shows hub' },
+          { value: 'tv.toprated', label: 'Top Rated TV', description: 'Built-in Top Rated TV Shows hub' },
+          { value: 'tv.recentlyviewed', label: 'Recently Watched Episodes', description: 'Built-in Recently Watched Episodes hub' },
         ];
       default:
         return [];
@@ -897,7 +1036,9 @@ const CollectionConfigForm = ({
           subtype: config.subtype || '',
           template: config.template || '',
           libraryId: config.libraryId || undefined,
+          libraryIds: config.libraryIds || (config.libraryId && typeof config.libraryId === 'string' ? [config.libraryId] : Array.isArray(config.libraryId) ? config.libraryId : []),
           libraryName: config.libraryName || undefined,
+          libraryNames: config.libraryNames || (config.libraryName ? [config.libraryName] : []),
           maxItems: config.maxItems || 50,
           customDays: config.customDays || 30,
           visibilityConfig: {
@@ -946,55 +1087,6 @@ const CollectionConfigForm = ({
       >
         {({ values, handleSubmit, handleChange, setFieldValue, isSubmitting, isValid, errors, touched }) => {
 
-          // Handle library selection changes using Formik's onChange pattern
-          const handleLibraryChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-            const libraryId = e.target.value;
-            setFieldValue('libraryId', libraryId);
-
-            const detectedType = (() => {
-              if (values.type === 'trakt' && values.subtype === 'custom' && detectedMediaTypes.trakt) {
-                return detectedMediaTypes.trakt;
-              }
-              if (values.type === 'tmdb' && values.subtype === 'custom' && detectedMediaTypes.tmdb) {
-                return detectedMediaTypes.tmdb;
-              }
-              if (values.type === 'imdb' && values.subtype === 'custom' && detectedMediaTypes.imdb) {
-                return detectedMediaTypes.imdb;
-              }
-              return null;
-            })();
-
-            if (libraryId === 'all') {
-              setFieldValue('libraryName', 'All Libraries');
-              setFieldValue('mediaType', detectedType || 'both');
-            } else {
-              const selectedLibrary = libraries.find((lib) => lib.id === libraryId);
-              setFieldValue('libraryName', selectedLibrary?.name);
-
-              if (detectedType && detectedType !== 'both') {
-                setFieldValue('mediaType', detectedType);
-              } else if (selectedLibrary) {
-                if (selectedLibrary.type === 'movie') {
-                  setFieldValue('mediaType', 'movie');
-                } else if (selectedLibrary.type === 'show') {
-                  setFieldValue('mediaType', 'tv');
-                } else {
-                  setFieldValue('mediaType', 'both');
-                }
-              } else {
-                setFieldValue('mediaType', 'both');
-              }
-            }
-
-            // Auto-select first template
-            if (!values.template) {
-              const templatePresets = getTemplatePresets(values, fetchedTitles, detectedMediaTypes);
-              if (templatePresets.length > 0 && templatePresets[0].value &&
-                templatePresets[0].value !== 'custom' && templatePresets[0].value !== 'fetch-title') {
-                setFieldValue('template', templatePresets[0].value);
-              }
-            }
-          };
 
           return (
             <Modal
@@ -1090,7 +1182,7 @@ const CollectionConfigForm = ({
                   }
 
                   // For Source collections (Tautulli/Trakt/etc), all options should be available
-                  if (values.type === 'tautulli' || values.type === 'trakt' || values.type === 'tmdb' || values.type === 'imdb' || values.type === 'letterboxd') {
+                  if (values.type === 'tautulli' || values.type === 'trakt' || values.type === 'tmdb' || values.type === 'imdb' || values.type === 'letterboxd' || values.type === 'hub') {
                     return {
                       usersHome: { enabled: true, label: 'Users Home' },
                       serverOwnerHome: { enabled: true, label: 'Server Owner Home' },
@@ -1425,23 +1517,84 @@ const CollectionConfigForm = ({
                           </label>
                           <div className="form-input-area">
                             <div className="form-input-field">
-                              <Field
-                                as="select"
-                                id="collectionLibrary"
-                                name="libraryId"
-                                onChange={handleLibraryChange}
-                              >
-                                <option value="">Select Libraries...</option>
-                                {getDetectedMediaType() && getDetectedMediaType() !== 'both' ? null : (
-                                  <option value="all">All Libraries</option>
-                                )}
-                                {getFilteredLibraries()
-                                  .map((library) => (
-                                    <option key={library.id} value={library.id}>
-                                      {library.name}
-                                    </option>
-                                  ))}
-                              </Field>
+                              <LibraryCheckboxDropdown
+                                selectedLibraries={(() => {
+                                  // Convert current libraryId/libraryIds to selectedLibraries array for the dropdown
+                                  if (values.libraryIds && Array.isArray(values.libraryIds)) {
+                                    return values.libraryIds;
+                                  }
+                                  if (values.libraryId) {
+                                    return Array.isArray(values.libraryId) ? values.libraryId : [values.libraryId];
+                                  }
+                                  return [];
+                                })()}
+                                allLibraries={getFilteredLibraries()}
+                                showAllLibrariesOption={!getDetectedMediaType() || getDetectedMediaType() === 'both'}
+                                onSelectionChange={(selectedIds: string[]) => {
+                                  // Handle multiple library selection changes
+                                  setFieldValue('libraryIds', selectedIds);
+                                  
+                                  const detectedType = (() => {
+                                    if (values.type === 'trakt' && values.subtype === 'custom' && detectedMediaTypes.trakt) {
+                                      return detectedMediaTypes.trakt;
+                                    }
+                                    if (values.type === 'tmdb' && values.subtype === 'custom' && detectedMediaTypes.tmdb) {
+                                      return detectedMediaTypes.tmdb;
+                                    }
+                                    if (values.type === 'imdb' && values.subtype === 'custom' && detectedMediaTypes.imdb) {
+                                      return detectedMediaTypes.imdb;
+                                    }
+                                    return null;
+                                  })();
+                                  
+                                  if (selectedIds.includes('all')) {
+                                    // All libraries selected
+                                    setFieldValue('libraryName', 'All Libraries');
+                                    setFieldValue('libraryNames', ['All Libraries']);
+                                    setFieldValue('mediaType', detectedType || 'both');
+                                  } else if (selectedIds.length === 1) {
+                                    // Single library selected
+                                    const selectedLibrary = libraries.find((lib) => lib.id === selectedIds[0]);
+                                    setFieldValue('libraryName', selectedLibrary?.name || '');
+                                    setFieldValue('libraryNames', selectedLibrary ? [selectedLibrary.name] : []);
+                                    
+                                    if (detectedType && detectedType !== 'both') {
+                                      setFieldValue('mediaType', detectedType);
+                                    } else if (selectedLibrary) {
+                                      if (selectedLibrary.type === 'movie') {
+                                        setFieldValue('mediaType', 'movie');
+                                      } else if (selectedLibrary.type === 'show') {
+                                        setFieldValue('mediaType', 'tv');
+                                      } else {
+                                        setFieldValue('mediaType', 'both');
+                                      }
+                                    } else {
+                                      setFieldValue('mediaType', 'both');
+                                    }
+                                  } else if (selectedIds.length > 1) {
+                                    // Multiple libraries selected
+                                    const selectedLibraries = libraries.filter(lib => selectedIds.includes(lib.id));
+                                    const libraryNames = selectedLibraries.map(lib => lib.name);
+                                    setFieldValue('libraryName', `${selectedIds.length} libraries selected`);
+                                    setFieldValue('libraryNames', libraryNames);
+                                    setFieldValue('mediaType', detectedType || 'both');
+                                  } else {
+                                    // No libraries selected
+                                    setFieldValue('libraryName', '');
+                                    setFieldValue('libraryNames', []);
+                                  }
+                                  
+                                  // Auto-select first template
+                                  if (!values.template) {
+                                    const templatePresets = getTemplatePresets(values, fetchedTitles, detectedMediaTypes);
+                                    if (templatePresets.length > 0 && templatePresets[0].value &&
+                                      templatePresets[0].value !== 'custom' && templatePresets[0].value !== 'fetch-title') {
+                                      setFieldValue('template', templatePresets[0].value);
+                                    }
+                                  }
+                                }}
+                                error={errors.libraryId && touched.libraryId ? errors.libraryId : ''}
+                              />
                             </div>
                             {errors.libraryId && touched.libraryId && (
                               <div className="error">
@@ -1615,7 +1768,13 @@ const CollectionConfigForm = ({
                                     const templatePresets = getTemplatePresets(values, fetchedTitles, detectedMediaTypes);
                                     const currentTemplate = values.template || templatePresets[0]?.value || '';
 
-                                    if (values.libraryId === 'all') {
+                                    const selectedLibraryIds = values.libraryIds || (values.libraryId ? (Array.isArray(values.libraryId) ? values.libraryId : [values.libraryId]) : []);
+                                    const hasAllLibraries = selectedLibraryIds.includes('all') || values.libraryId === 'all';
+                                    const specificLibraryIds = selectedLibraryIds.filter(id => id !== 'all');
+                                    const hasMultipleSpecificLibraries = specificLibraryIds.length > 1;
+                                    const hasSingleSpecificLibrary = specificLibraryIds.length === 1;
+                                    
+                                    if (hasAllLibraries) {
                                       return (
                                         // Show preview for each library when "All Libraries" is selected
                                         <div className="space-y-2">
@@ -1647,6 +1806,75 @@ const CollectionConfigForm = ({
                                               );
                                             })}
                                         </div>
+                                      );
+                                    } else if (hasMultipleSpecificLibraries) {
+                                      return (
+                                        // Show preview for each selected specific library
+                                        <div className="space-y-2">
+                                          {selectedLibraryIds
+                                            .filter(id => id !== 'all')
+                                            .map((libraryId) => {
+                                              const library = libraries.find(lib => lib.id === libraryId);
+                                              if (!library) return null;
+                                              
+                                              const libraryMediaType = library.type === 'show' ? 'tv' : 'movie';
+                                              const templateToUse = (() => {
+                                                if (values.template === 'custom') {
+                                                  if (libraryMediaType === 'movie') {
+                                                    return values.customMovieTemplate || '';
+                                                  } else {
+                                                    return values.customTVTemplate || '';
+                                                  }
+                                                }
+                                                return currentTemplate;
+                                              })();
+
+                                              return (
+                                                <div key={library.id} className="flex items-start space-x-2">
+                                                  <span className={`font-medium flex-shrink-0 ${library.type === 'movie' ? 'text-blue-400' : 'text-green-400'
+                                                    }`}>
+                                                    {library.name}:
+                                                  </span>
+                                                  <span className="text-gray-300">
+                                                    {templateToUse ? generatePreview(templateToUse, libraryMediaType, values) : ''}
+                                                  </span>
+                                                </div>
+                                              );
+                                            })}
+                                        </div>
+                                      );
+                                    } else if (hasSingleSpecificLibrary) {
+                                      return (
+                                        // Show preview for single selected specific library
+                                        (() => {
+                                          const libraryId = specificLibraryIds[0];
+                                          const library = libraries.find(lib => lib.id === libraryId);
+                                          if (!library) return 'No library found';
+                                          
+                                          const libraryMediaType = library.type === 'show' ? 'tv' : 'movie';
+                                          const templateToUse = (() => {
+                                            if (values.template === 'custom') {
+                                              if (libraryMediaType === 'movie') {
+                                                return values.customMovieTemplate || '';
+                                              } else {
+                                                return values.customTVTemplate || '';
+                                              }
+                                            }
+                                            return currentTemplate;
+                                          })();
+
+                                          return (
+                                            <div className="flex items-start space-x-2">
+                                              <span className={`font-medium flex-shrink-0 ${library.type === 'movie' ? 'text-blue-400' : 'text-green-400'
+                                                }`}>
+                                                {library.name}:
+                                              </span>
+                                              <span className="text-gray-300">
+                                                {templateToUse ? generatePreview(templateToUse, libraryMediaType, values) : ''}
+                                              </span>
+                                            </div>
+                                          );
+                                        })()
                                       );
                                     } else if (values.mediaType === 'both' && values.template === 'custom') {
                                       return (
@@ -2240,9 +2468,12 @@ const CollectionConfigForm = ({
                               </div>
 
                               {/* Movie Auto-Request - only show for movie libraries or all libraries */}
-                              {(values.libraryId === 'all' ||
-                                (values.libraryId && libraries.find(lib => lib.id === values.libraryId)?.type === 'movie') ||
-                                values.mediaType === 'movie' || values.mediaType === 'both') && (
+                              {(() => {
+                                const selectedLibraryIds = values.libraryIds || (values.libraryId ? (Array.isArray(values.libraryId) ? values.libraryId : [values.libraryId]) : []);
+                                const hasAllLibraries = selectedLibraryIds.includes('all') || values.libraryId === 'all';
+                                const hasMovieLibrary = selectedLibraryIds.some(id => id !== 'all' && libraries.find(lib => lib.id === id)?.type === 'movie');
+                                return hasAllLibraries || hasMovieLibrary || values.mediaType === 'movie' || values.mediaType === 'both';
+                              })() && (
                                   <div className="form-row">
                                     <label className="text-label" htmlFor="movie-auto-request">Movie Auto-Request</label>
                                     <div className="form-input-area" id="movie-auto-request">
@@ -2280,9 +2511,12 @@ const CollectionConfigForm = ({
                                 )}
 
                               {/* TV Auto-Request - only show for TV libraries or all libraries */}
-                              {(values.libraryId === 'all' ||
-                                (values.libraryId && libraries.find(lib => lib.id === values.libraryId)?.type === 'show') ||
-                                values.mediaType === 'tv' || values.mediaType === 'both') && (
+                              {(() => {
+                                const selectedLibraryIds = values.libraryIds || (values.libraryId ? (Array.isArray(values.libraryId) ? values.libraryId : [values.libraryId]) : []);
+                                const hasAllLibraries = selectedLibraryIds.includes('all') || values.libraryId === 'all';
+                                const hasTvLibrary = selectedLibraryIds.some(id => id !== 'all' && libraries.find(lib => lib.id === id)?.type === 'show');
+                                return hasAllLibraries || hasTvLibrary || values.mediaType === 'tv' || values.mediaType === 'both';
+                              })() && (
                                   <div className="form-row">
                                     <label className="text-label" htmlFor="tv-auto-request">TV Auto-Request</label>
                                     <div className="form-input-area" id="tv-auto-request">

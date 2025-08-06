@@ -3,7 +3,7 @@ import { MediaType } from '@server/constants/media';
 import { getRepository } from '@server/datasource';
 import { In } from 'typeorm';
 import Media from '@server/entity/Media';
-import { createOrUpdateCollection } from '@server/lib/collectionsUtils';
+import { updateCollectionContents } from '@server/lib/collectionsUtils';
 import { BaseCollectionSync } from './BaseCollectionSync';
 import type { CollectionConfig } from '@server/lib/settings';
 import { CollectionSyncErrorType } from './types';
@@ -180,7 +180,7 @@ export class TmdbCollectionSync extends BaseCollectionSync {
 
   protected async createCollection(items: any[], mediaType: 'movie' | 'tv', collectionName: string, plexClient: any, allCollections: any[], config: any, processedCollectionKeys?: Set<string>) {
     const dummyUser = { id: 0 } as any;
-    const result = await createOrUpdateCollection(
+    const result = await updateCollectionContents(
       dummyUser, items, mediaType, plexClient, allCollections, config.visibilityConfig, 
       collectionName, true, `OverseerrTmdb${config.id}`, processedCollectionKeys, 
       config.sortOrderLibrary, (config as any)._totalCollectionsInLibrary, config.customPoster

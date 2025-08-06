@@ -4,9 +4,9 @@
  */
 
 export interface CollectionConfig {
-  readonly id: number;
+  readonly id: number | string; // number for collections, string for hubs
   readonly name: string; // User-entered collection name
-  readonly type?: 'overseerr' | 'tautulli' | 'trakt' | 'tmdb' | 'imdb' | 'letterboxd';
+  readonly type?: 'overseerr' | 'tautulli' | 'trakt' | 'tmdb' | 'imdb' | 'letterboxd' | 'hub';
   readonly subtype: string; // Specific option like 'users', 'most_popular_plays', etc.
   readonly template: string; // Collection title template (for preset templates or single media type)
   readonly customMovieTemplate?: string; // Custom template for movie collections when mediaType is 'both'
@@ -19,12 +19,16 @@ export interface CollectionConfig {
   };
   readonly maxItems: number;
   readonly mediaType?: 'movie' | 'tv' | 'both';
-  readonly libraryId?: string; // Selected library ID ('all' for all enabled libraries)
-  readonly libraryName?: string; // Selected library name for display
+  readonly libraryId?: string | string[]; // Selected library ID(s) - single string for backward compatibility, array for multiple selection
+  readonly libraryIds?: string[]; // New: Array of selected library IDs (replaces single libraryId)
+  readonly libraryName?: string; // Selected library name for display (for single library) 
+  readonly libraryNames?: string[]; // New: Array of selected library names for display (for multiple libraries)
   readonly sortOrderHome?: number; // Order for Plex home screen (creation time based)
   readonly sortOrderLibrary?: number; // Order for Plex library tab (sortTitle based)
   readonly parentConfigId?: number; // Reference to original config when expanded from 'all' libraries
   readonly isExpandedConfig?: boolean; // True if this config was auto-generated from a parent 'all' config
+  readonly collectionRatingKey?: string; // Plex collection rating key for reordering (e.g., "35955")
+  readonly collectionRatingKeys?: Record<string, string>; // Multiple rating keys by library ID (e.g., {"1": "35954", "2": "35955"})
   // Library-specific sort orders (dynamic keys like "1_sortOrderHome", "1_sortOrderLibrary", etc.)
   readonly [key: string]: any; // Allows dynamic library-specific sort order keys
   readonly customDays?: number; // Number of days for Tautulli collections
@@ -108,15 +112,38 @@ export interface CollectionConfigFormProps {
 export interface CollectionConfigListProps {
   configs: CollectionConfig[];
   onEdit: (config: CollectionConfig) => void;
-  onDelete: (configId: number) => void;
+  onDelete: (configId: number | string) => void;
   onAdd: () => void;
 }
 
 export interface CollectionSettingsProps {
   collectionConfigs: CollectionConfig[];
-  libraries: Library[];
+  libraries?: Library[]; // Optional - component can fetch directly from Plex
   onUpdateConfigs: (configs: CollectionConfig[]) => void;
 }
 
-export type CollectionType = 'overseerr' | 'tautulli' | 'trakt' | 'tmdb' | 'imdb' | 'letterboxd';
+/**
+ * Configuration for Plex hubs (built-in hubs + promoted collections)
+ * Hubs are what actually appear on the Plex home screen
+ */
+export interface PlexHubConfig {
+  readonly id: string; // Use hub identifier as ID (e.g., "1-movie.recentlyadded")  
+  readonly hubIdentifier: string; // Plex hub identifier (e.g., "movie.recentlyadded" or "custom.collection.1.35954")
+  readonly name: string; // Display name (e.g., "Recently Added Movies")
+  readonly libraryId: string; // Library ID this hub belongs to
+  readonly libraryName: string; // Library display name
+  readonly mediaType: 'movie' | 'tv'; // Media type (hubs are always single type)
+  readonly sortOrderLibrary: number; // Position in library
+  readonly isPromotedCollection?: boolean; // True if this hub is a promoted collection from our app
+  readonly isUnmanagedCollection?: boolean; // True if this is a custom collection hub without matching collection config
+  readonly sourceCollectionId?: number; // ID of the source collection config if this is a promoted collection
+  readonly visibilityConfig: {
+    usersHome: boolean;
+    serverOwnerHome: boolean;
+    libraryRecommended: boolean;
+    libraryTabOnly: boolean;
+  };
+}
+
+export type CollectionType = 'overseerr' | 'tautulli' | 'trakt' | 'tmdb' | 'imdb' | 'letterboxd' | 'hub';
 export type MediaType = 'movie' | 'tv' | 'both';

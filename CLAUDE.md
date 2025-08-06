@@ -228,7 +228,7 @@ This fork extends the upstream sct/overseerr with a comprehensive **Plex Collect
 - **Overseerr**: Collections based on user requests
 
 **Configuration Options**:
-- Template-based naming with user variables (`{displayName}`, `{username}`, etc.)
+- Template-based naming with user variables (`{nickname}`, `{username}`, etc.)
 - Library-specific settings and sort ordering
 - Media type filtering (movies, TV, or both)
 - Time period restrictions (custom days for Tautulli)
@@ -237,7 +237,7 @@ This fork extends the upstream sct/overseerr with a comprehensive **Plex Collect
 - Automatic expansion for "all libraries" configurations
 
 **Template System**:
-- Dynamic collection naming: `"{displayName}'s Most Watched"` 
+- Dynamic collection naming: `"{nickname}'s Most Watched"` 
 - User variable substitution with fallbacks
 - Special character sanitization for Plex compatibility
 - Support for custom movie vs TV templates when media type is "both"

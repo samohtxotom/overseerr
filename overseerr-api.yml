@@ -195,7 +195,7 @@ components:
           example: "User Requests"
         type:
           type: string
-          enum: ['overseerr', 'tautulli', 'trakt', 'tmdb', 'imdb']
+          enum: ['overseerr', 'tautulli', 'trakt', 'tmdb', 'imdb', 'letterboxd']
           example: 'overseerr'
         subtype:
           type: string
@@ -249,10 +249,12 @@ components:
           type: string
           enum: ['movie', 'tv', 'both']
           example: 'both'
-        libraryId:
-          type: string
-          description: "Selected library ID ('all' for all enabled libraries)"
-          example: "1"
+        libraryIds:
+          type: array
+          items:
+            type: string
+          description: "Array of selected library IDs (['all'] for all enabled libraries)"
+          example: ["1", "2"]
           nullable: true
         libraryName:
           type: string
@@ -430,8 +432,73 @@ components:
         - type
         - subtype
         - template
-        - visibility
+        - visibilityConfig
         - maxItems
+    PlexHubConfig:
+      type: object
+      properties:
+        id:
+          type: string
+          description: "Unique hub identifier (libraryId-hubIdentifier)"
+          example: "1-movie.recentlyadded"
+        hubIdentifier:
+          type: string
+          description: "Plex built-in hub identifier"
+          example: "movie.recentlyadded"
+        name:
+          type: string
+          description: "Display name for the hub"
+          example: "Recently Added Movies"
+        libraryId:
+          type: string
+          description: "Plex library ID"
+          example: "1"
+        libraryName:
+          type: string
+          description: "Plex library display name"
+          example: "Films"
+        mediaType:
+          type: string
+          enum: ['movie', 'tv', 'both']
+          description: "Media type of the hub"
+          example: 'movie'
+        sortOrderLibrary:
+          type: integer
+          description: "Position/order within the library"
+          example: 0
+        visibilityConfig:
+          type: object
+          properties:
+            usersHome:
+              type: boolean
+              description: "Show on shared users' home screens"
+              example: true
+            serverOwnerHome:
+              type: boolean
+              description: "Show on server owner's home screen"
+              example: false
+            libraryRecommended:
+              type: boolean
+              description: "Show in library recommended section"
+              example: false
+            libraryTabOnly:
+              type: boolean
+              description: "Show only in library tab (overrides other options)"
+              example: false
+          required:
+            - usersHome
+            - serverOwnerHome
+            - libraryRecommended
+            - libraryTabOnly
+      required:
+        - id
+        - hubIdentifier
+        - name
+        - libraryId
+        - libraryName
+        - mediaType
+        - sortOrderLibrary
+        - visibilityConfig
     PlexConnection:
       type: object
       properties:
@@ -2222,6 +2289,43 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PlexSettings'
+  /settings/plex/libraries:
+    get:
+      summary: Get Plex libraries directly from Plex server
+      description: Fetches all available libraries directly from the connected Plex server, bypassing Overseerr's library configuration
+      tags:
+        - settings
+      responses:
+        '200':
+          description: Plex libraries retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                      description: Library ID from Plex
+                      example: "1"
+                    name:
+                      type: string
+                      description: Library name
+                      example: "Movies"
+                    type:
+                      type: string
+                      enum: [movie, show]
+                      description: Library media type
+                      example: "movie"
+                    enabled:
+                      type: boolean
+                      description: Always true for direct Plex libraries
+                      example: true
+        '400':
+          description: No admin Plex token found
+        '500':
+          description: Failed to fetch Plex libraries
   /settings/plex/library:
     get:
       summary: Get Plex libraries
@@ -2635,6 +2739,249 @@ paths:
                   message:
                     type: string
                     example: "Internal server error while fetching title"
+  /settings/hubs/discover:
+    get:
+      summary: Discover available Plex hubs
+      description: |
+        Discovers existing Plex built-in hubs across all libraries and converts them to collection configurations.
+        This endpoint scans all enabled Plex libraries for built-in hubs (Recently Added, Continue Watching, etc.)
+        and returns them as potential collection configurations that can be imported.
+      tags:
+        - settings
+      responses:
+        '200':
+          description: Plex hubs discovered successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  discoveredConfigs:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PlexHubConfig'
+                  libraryCount:
+                    type: integer
+                    example: 4
+                  totalHubsFound:
+                    type: integer
+                    example: 12
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Failed to discover Plex hubs"
+                  message:
+                    type: string
+                    example: "Could not connect to Plex server"
+  /settings/hubs/status:
+    get:
+      summary: Get hub management system status
+      description: |
+        Returns the current status and capabilities of the Plex hub management system.
+        Includes connection status, available libraries, and feature capabilities.
+      tags:
+        - settings
+      responses:
+        '200':
+          description: Hub management status retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enabled:
+                    type: boolean
+                    example: true
+                  plexConnected:
+                    type: boolean
+                    example: true
+                  libraryCount:
+                    type: integer
+                    example: 4
+                  capabilities:
+                    type: object
+                    properties:
+                      hubReordering:
+                        type: boolean
+                        example: true
+                      visibilityControl:
+                        type: boolean
+                        example: true
+                      builtInHubManagement:
+                        type: boolean
+                        example: true
+                      collectionHubManagement:
+                        type: boolean
+                        example: true
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Failed to get hub management status"
+  /settings/hubs/configs:
+    get:
+      summary: Get Plex hub configurations
+      description: |
+        Retrieves the current Plex hub configurations stored in settings.
+        Returns all configured hubs with their display names, visibility settings, and sorting order.
+      tags:
+        - settings
+      responses:
+        '200':
+          description: Hub configurations retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  hubConfigs:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PlexHubConfig'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Failed to get hub configurations"
+                  message:
+                    type: string
+                    example: "Internal server error"
+    post:
+      summary: Save Plex hub configurations
+      description: |
+        Saves Plex hub configurations to settings. This endpoint accepts an array of hub configurations
+        and stores them for use by the hub management system.
+      tags:
+        - settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                hubConfigs:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/PlexHubConfig'
+              required:
+                - hubConfigs
+      responses:
+        '200':
+          description: Hub configurations saved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  hubConfigs:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PlexHubConfig'
+                  message:
+                    type: string
+                    example: "Hub configurations saved successfully"
+        '400':
+          description: Invalid request data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Invalid hubConfigs: must be an array"
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Failed to save hub configurations"
+                  message:
+                    type: string
+                    example: "Internal server error"
+  /settings/hubs/configs/append:
+    post:
+      summary: Append new Plex hub configurations
+      description: |
+        Appends new Plex hub configurations to existing ones without replacing the entire array.
+        This endpoint is used during hub discovery to add newly discovered hubs without losing existing configurations.
+      tags:
+        - settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                hubConfigs:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/PlexHubConfig'
+              required:
+                - hubConfigs
+      responses:
+        '200':
+          description: Hub configurations appended successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  hubConfigs:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PlexHubConfig'
+                  message:
+                    type: string
+                    example: "Hub configurations appended successfully"
+        '400':
+          description: Invalid request data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Invalid hubConfigs: must be an array"
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Failed to append hub configurations"
+                  message:
+                    type: string
+                    example: "Internal server error"
   /settings/collections/poster:
     post:
       summary: Upload collection poster image

@@ -1,6 +1,6 @@
 import type PlexAPI from '@server/api/plexapi';
 import TautulliAPI from '@server/api/tautulli';
-import { createOrUpdateCollection } from '@server/lib/collectionsUtils';
+import { updateCollectionContents } from '@server/lib/collectionsUtils';
 import type { CollectionConfig } from '@server/lib/settings';
 import { getSettings } from '@server/lib/settings';
 // import { extractErrorMessage } from '@server/lib/utils/templateUtils'; // Not needed in new implementation
@@ -231,7 +231,7 @@ export class TautulliCollectionSync extends BaseCollectionSync {
       // The user parameter is ignored when customTitle and isGlobalCollection=true are provided
       const dummyUser = { id: 0 } as any; // Minimal object to satisfy function signature
 
-      const result = await createOrUpdateCollection(
+      const result = await updateCollectionContents(
         dummyUser, // Not used due to customTitle + isGlobalCollection=true
         items,
         mediaType,
@@ -246,6 +246,9 @@ export class TautulliCollectionSync extends BaseCollectionSync {
         (config as any)._totalCollectionsInLibrary,
         config.customPoster
       );
+
+      // Update config with rating key if we got one
+      this.updateConfigWithRatingKey(config, result.collectionRatingKey);
 
       return {
         isNew: result.isNew,

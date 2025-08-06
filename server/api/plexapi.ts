@@ -1243,6 +1243,75 @@ class PlexAPI {
   }
 
   /**
+   * Incrementally update collection contents (preserve collection, update items only)
+   * This replaces the delete/recreate approach with smart add/remove/reorder
+   */
+  public async updateCollectionContents(
+    collectionRatingKey: string,
+    desiredItems: PlexCollectionItem[]
+  ): Promise<{
+    added: number;
+    removed: number;
+    reordered: boolean;
+    errors: string[];
+  }> {
+    const errors: string[] = [];
+    let added = 0;
+    let removed = 0;
+    let reordered = false;
+
+    try {
+      // Get current collection contents (returns array of rating keys)
+      const currentRatingKeys = await this.getCollectionItems(collectionRatingKey);
+      const currentRatingKeysSet = new Set(currentRatingKeys);
+      const desiredRatingKeysSet = new Set(desiredItems.map(item => item.ratingKey));
+
+      // Calculate what needs to be added and removed
+      const toAdd = desiredItems.filter(item => !currentRatingKeysSet.has(item.ratingKey));
+      const toRemoveKeys = currentRatingKeys.filter(ratingKey => !desiredRatingKeysSet.has(ratingKey));
+
+      // Remove items that shouldn't be in the collection
+      if (toRemoveKeys.length > 0) {
+        const removeResult = await this.removeSpecificItemsFromCollection(
+          collectionRatingKey,
+          toRemoveKeys
+        );
+        removed = removeResult.successful;
+        if (removeResult.failed > 0) {
+          errors.push(`Failed to remove ${removeResult.failed} items`);
+        }
+      }
+
+      // Add new items to the collection
+      if (toAdd.length > 0) {
+        const addResult = await this.addSpecificItemsToCollection(
+          collectionRatingKey,
+          toAdd.map(item => item.ratingKey)
+        );
+        added = addResult.successful;
+        if (addResult.failed > 0) {
+          errors.push(`Failed to add ${addResult.failed} items`);
+        }
+      }
+
+      // Reorder items to match desired order (only if we have items and no major errors)
+      if (desiredItems.length > 0 && (added + removed) < errors.length * 2) {
+        try {
+          await this.arrangeCollectionItemsInOrder(collectionRatingKey, desiredItems);
+          reordered = true;
+        } catch (error) {
+          errors.push(`Failed to reorder collection: ${(error as Error).message}`);
+        }
+      }
+
+      return { added, removed, reordered, errors };
+    } catch (error) {
+      errors.push(`Collection update failed: ${(error as Error).message}`);
+      return { added: 0, removed: 0, reordered: false, errors };
+    }
+  }
+
+  /**
    * Add specific items to a collection (incremental update)
    */
   public async addSpecificItemsToCollection(
@@ -1294,6 +1363,209 @@ class PlexAPI {
       logger.error(`Error deleting collection ${collectionRatingKey}.`, {
         label: 'Plex API',
         error,
+      });
+      throw error;
+    }
+  }
+
+  // HUB MANAGEMENT METHODS
+
+  /**
+   * Get all hubs for a specific library section
+   * Returns both built-in hubs (Recently Added, etc.) and custom collections
+   */
+  public async getLibraryHubs(sectionId: string): Promise<any> {
+    try {
+      const response = await this.plexClient.query(`/hubs/sections/${sectionId}`);
+      return response;
+    } catch (error) {
+      logger.error(`Error fetching hubs for library section ${sectionId}`, {
+        label: 'Plex API',
+        error: error instanceof Error ? error.message : String(error),
+        sectionId,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Get hub management interface for a library section
+   * This endpoint provides the drag-and-drop hub ordering interface
+   */
+  public async getHubManagement(sectionId: string): Promise<any> {
+    try {
+      const response = await this.plexClient.query(`/hubs/sections/${sectionId}/manage`);
+      return response;
+    } catch (error) {
+      logger.error(`Error fetching hub management for library section ${sectionId}`, {
+        label: 'Plex API',
+        error: error instanceof Error ? error.message : String(error),
+        sectionId,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Move a hub to a new position in the library home screen
+   * @param sectionId Library section ID
+   * @param hubId Hub identifier (e.g., 'movie.recentlyadded', collection rating key)
+   * @param afterHubId Hub to move this hub after (null for first position)
+   */
+  public async moveHub(sectionId: string, hubId: string, afterHubId?: string): Promise<void> {
+    try {
+      const url = afterHubId 
+        ? `/hubs/sections/${sectionId}/manage/${hubId}/move?after=${afterHubId}`
+        : `/hubs/sections/${sectionId}/manage/${hubId}/move`;
+      
+      await this.safePutQuery(url);
+      
+      // Hub moved successfully - reduced logging
+    } catch (error) {
+      logger.error(`Error moving hub ${hubId} in library section ${sectionId}`, {
+        label: 'Plex API',
+        error: error instanceof Error ? error.message : String(error),
+        sectionId,
+        hubId,
+        afterHubId,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Update hub visibility settings
+   * @param sectionId Library section ID  
+   * @param hubId Hub identifier
+   * @param visibility Hub visibility configuration
+   */
+  /**
+   * Get current collection visibility settings
+   */
+  public async getCollectionVisibility(collectionRatingKey: string): Promise<any> {
+    try {
+      const response = await this.plexClient.query(
+        `/library/collections/${collectionRatingKey}`
+      );
+      
+      // Extract visibility info from collection metadata
+      const collection = response.MediaContainer?.Metadata?.[0];
+      if (!collection) {
+        return {};
+      }
+
+      // Return basic visibility structure - this is simplified since getting exact 
+      // visibility settings from Plex is complex and not critical for update logic
+      return {
+        isVisible: collection.visible !== false,
+        // Add more visibility fields if needed
+      };
+    } catch (error) {
+      logger.warn(`Failed to get collection visibility for ${collectionRatingKey}`, {
+        label: 'Plex API',
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return {};
+    }
+  }
+
+  public async updateHubVisibility(sectionId: string, hubId: string, visibility: {
+    promotedToRecommended?: boolean;
+    promotedToOwnHome?: boolean;
+    promotedToSharedHome?: boolean;
+  }): Promise<void> {
+    try {
+      const params = new URLSearchParams();
+      
+      if (visibility.promotedToRecommended !== undefined) {
+        params.append('promotedToRecommended', visibility.promotedToRecommended ? '1' : '0');
+      }
+      if (visibility.promotedToOwnHome !== undefined) {
+        params.append('promotedToOwnHome', visibility.promotedToOwnHome ? '1' : '0');
+      }
+      if (visibility.promotedToSharedHome !== undefined) {
+        params.append('promotedToSharedHome', visibility.promotedToSharedHome ? '1' : '0');
+      }
+
+      const url = `/hubs/sections/${sectionId}/manage/${hubId}?${params.toString()}`;
+      await this.safePutQuery(url);
+      
+      // Hub visibility updated successfully - reduced logging
+    } catch (error) {
+      logger.error(`Error updating hub visibility for ${hubId} in library section ${sectionId}`, {
+        label: 'Plex API',
+        error: error instanceof Error ? error.message : String(error),
+        sectionId,
+        hubId,
+        visibility,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Get all available hubs across all library sections
+   * Useful for getting a complete overview of the Plex home screen
+   */
+  public async getAllLibraryHubs(): Promise<{ [sectionId: string]: any }> {
+    try {
+      const libraries = await this.getLibraries();
+      const allHubs: { [sectionId: string]: any } = {};
+
+      for (const library of libraries) {
+        try {
+          allHubs[library.key] = await this.getLibraryHubs(library.key);
+        } catch (error) {
+          logger.warn(`Failed to fetch hubs for library ${library.title} (${library.key})`, {
+            label: 'Plex API',
+            error: error instanceof Error ? error.message : String(error),
+            libraryKey: library.key,
+            libraryTitle: library.title,
+          });
+          // Continue with other libraries even if one fails
+        }
+      }
+
+      return allHubs;
+    } catch (error) {
+      logger.error('Error fetching all library hubs', {
+        label: 'Plex API',
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Reorder multiple hubs in a library section
+   * @param sectionId Library section ID
+   * @param hubOrder Array of hub IDs in desired order
+   */
+  public async reorderHubs(sectionId: string, hubOrder: string[]): Promise<void> {
+    try {
+      // Move hubs one by one to achieve the desired order
+      // Start from the second hub and move each one after the previous
+      for (let i = 1; i < hubOrder.length; i++) {
+        const hubId = hubOrder[i];
+        const afterHubId = hubOrder[i - 1];
+        
+        await this.moveHub(sectionId, hubId, afterHubId);
+        
+        // Small delay between moves to avoid overwhelming the API
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+      
+      logger.info(`Successfully reordered ${hubOrder.length} hubs in library ${sectionId}`, {
+        label: 'Plex API',
+        sectionId,
+        hubCount: hubOrder.length,
+      });
+    } catch (error) {
+      logger.error(`Error reordering hubs in library section ${sectionId}`, {
+        label: 'Plex API',
+        error: error instanceof Error ? error.message : String(error),
+        sectionId,
+        hubOrder,
       });
       throw error;
     }

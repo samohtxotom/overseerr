@@ -14,9 +14,11 @@ import { TraktCollectionSync } from '@server/lib/collections/TraktCollectionSync
 import { TmdbCollectionSync } from '@server/lib/collections/TmdbCollectionSync';
 import { ImdbCollectionSync } from '@server/lib/collections/ImdbCollectionSync';
 import { LetterboxdCollectionSync } from '@server/lib/collections/LetterboxdCollectionSync';
+// PlexCollectionSync removed - Plex hubs now managed separately via PlexHubConfig
 import {
   extractErrorMessage,
 } from '@server/lib/utils/templateUtils';
+import { applyUnifiedOrderingToPlex, type OrderingItem } from './collections/UnifiedOrderingService';
 import logger from '@server/logger';
 import { IsNull, Not } from 'typeorm';
 
@@ -140,6 +142,12 @@ class CollectionsSync {
 
       // Perform the sync operations
       await this.syncCollections(plexClient);
+      
+      // Sync hub visibility settings
+      await this.syncHubVisibility(plexClient);
+      
+      // Sync unified ordering (collections + hubs)
+      await this.syncUnifiedOrdering(plexClient);
 
       const duration = Date.now() - startTime;
       logger.info(`Collections sync completed in ${duration}ms.`, {
@@ -386,6 +394,8 @@ class CollectionsSync {
                 }
                 break;
 
+              // Note: 'plex' type removed - Plex built-in hubs are now managed separately via PlexHubConfig
+
               default:
                 logger.warn(`Unknown collection type: ${config.type}`, {
                   label: 'Collections Sync',
@@ -615,6 +625,260 @@ class CollectionsSync {
   }
 
   /**
+   * Sync Plex hub visibility settings to match our configuration
+   */
+  private async syncHubVisibility(plexClient: PlexAPI): Promise<void> {
+    if (this.cancelled) return;
+
+    try {
+      const settings = getSettings();
+      const hubConfigs = settings.plex.hubConfigs || [];
+
+      if (hubConfigs.length === 0) {
+        logger.info('No hub configurations found, skipping hub sync', {
+          label: 'Collections Sync',
+        });
+        return;
+      }
+
+      logger.info(`Starting hub visibility sync for ${hubConfigs.length} hub configurations`, {
+        label: 'Collections Sync',
+        hubConfigCount: hubConfigs.length,
+      });
+
+      // Group hub configs by library for efficient processing
+      const hubConfigsByLibrary = new Map<string, any[]>();
+      
+      for (const hubConfig of hubConfigs) {
+        if (!hubConfigsByLibrary.has(hubConfig.libraryId)) {
+          hubConfigsByLibrary.set(hubConfig.libraryId, []);
+        }
+        hubConfigsByLibrary.get(hubConfig.libraryId)!.push(hubConfig);
+      }
+
+      // Process each library
+      for (const [libraryId, libraryHubConfigs] of hubConfigsByLibrary) {
+        if (this.cancelled) return;
+
+        try {
+          logger.info(`Syncing ${libraryHubConfigs.length} hubs for library ${libraryId}`, {
+            label: 'Collections Sync',
+            libraryId,
+            hubCount: libraryHubConfigs.length,
+          });
+
+          // Update visibility for each hub in this library
+          for (const hubConfig of libraryHubConfigs) {
+            if (this.cancelled) return;
+
+            try {
+              // Convert our visibility config to Plex format
+              const plexVisibility = {
+                promotedToOwnHome: hubConfig.visibilityConfig?.serverOwnerHome || false,
+                promotedToSharedHome: hubConfig.visibilityConfig?.usersHome || false,
+                promotedToRecommended: hubConfig.visibilityConfig?.libraryRecommended || false,
+                homeVisibility: (hubConfig.visibilityConfig?.usersHome || hubConfig.visibilityConfig?.serverOwnerHome) ? 'all' : 'none',
+                recommendationsVisibility: hubConfig.visibilityConfig?.libraryRecommended ? 'all' : 'none',
+              };
+
+              // Updating hub visibility - reduced logging
+
+              await plexClient.updateHubVisibility(libraryId, hubConfig.hubIdentifier, plexVisibility);
+
+              logger.info(`Successfully updated hub visibility: ${hubConfig.name}`, {
+                label: 'Collections Sync',
+                hubName: hubConfig.name,
+                hubIdentifier: hubConfig.hubIdentifier,
+                libraryId,
+              });
+            } catch (error) {
+              logger.error(`Failed to update visibility for hub ${hubConfig.hubIdentifier}: ${extractErrorMessage(error)}`, {
+                label: 'Collections Sync',
+                hubIdentifier: hubConfig.hubIdentifier,
+                libraryId,
+                error: extractErrorMessage(error),
+              });
+            }
+          }
+        } catch (error) {
+          logger.error(`Failed to process hubs for library ${libraryId}: ${extractErrorMessage(error)}`, {
+            label: 'Collections Sync',
+            libraryId,
+            error: extractErrorMessage(error),
+          });
+        }
+      }
+
+      logger.info('Hub visibility sync completed', {
+        label: 'Collections Sync',
+        processedLibraries: hubConfigsByLibrary.size,
+        totalHubConfigs: hubConfigs.length,
+      });
+    } catch (error) {
+      logger.error(`Hub visibility sync failed: ${extractErrorMessage(error)}`, {
+        label: 'Collections Sync',
+        error: extractErrorMessage(error),
+      });
+      // Don't throw - we don't want hub sync failures to break collection sync
+    }
+  }
+
+
+  /**
+   * Sync unified ordering for collections and hubs together
+   * This replaces the separate hub ordering sync with a unified approach
+   */
+  private async syncUnifiedOrdering(plexClient: PlexAPI): Promise<void> {
+    if (this.cancelled) return;
+
+    try {
+      const settings = getSettings();
+      const collectionConfigs = settings.plex.collectionConfigs || [];
+      const hubConfigs = settings.plex.hubConfigs || [];
+
+      // Build unified ordering items for each library
+      const orderingItemsByLibrary = new Map<string, OrderingItem[]>();
+
+      // Add collection configs to ordering
+      for (const config of collectionConfigs) {
+        let librariesToProcess: string[] = [];
+        
+        // If config has collectionRatingKeys (multi-library rating keys), process all those libraries
+        if (config.collectionRatingKeys && Object.keys(config.collectionRatingKeys).length > 0) {
+          librariesToProcess = Object.keys(config.collectionRatingKeys);
+        } else {
+          // Fallback to the old logic for configs without collectionRatingKeys
+          const libraryIds = config.libraryIds || (config.libraryId ? [config.libraryId] : []);
+          const normalizedLibraryIds = Array.isArray(libraryIds) ? libraryIds : [libraryIds];
+          librariesToProcess = normalizedLibraryIds.filter((id): id is string => typeof id === 'string' && id !== 'all');
+        }
+        
+        for (const libraryId of librariesToProcess) {
+
+          if (!orderingItemsByLibrary.has(libraryId)) {
+            orderingItemsByLibrary.set(libraryId, []);
+          }
+
+          // For collections, we need the collectionRatingKey to create proper Plex identifiers
+          // Check both the old single rating key and new multi-library rating keys
+          let ratingKeyForLibrary = config.collectionRatingKey; // Fallback to single rating key
+          
+          if (config.collectionRatingKeys && config.collectionRatingKeys[libraryId]) {
+            ratingKeyForLibrary = config.collectionRatingKeys[libraryId];
+          }
+          
+          // If we have a rating key for this library, include it in ordering
+          if (ratingKeyForLibrary) {
+            orderingItemsByLibrary.get(libraryId)!.push({
+              id: config.id,
+              type: 'collection',
+              libraryId,
+              collectionRatingKey: ratingKeyForLibrary,
+              sortOrder: config.sortOrderLibrary || 0,
+            });
+          }
+        }
+      }
+
+      // Add hub configs to ordering - group by library and use UI order
+      const hubConfigsByLibrary = new Map<string, any[]>();
+      for (const hubConfig of hubConfigs) {
+        if (!hubConfigsByLibrary.has(hubConfig.libraryId)) {
+          hubConfigsByLibrary.set(hubConfig.libraryId, []);
+        }
+        hubConfigsByLibrary.get(hubConfig.libraryId)!.push(hubConfig);
+      }
+
+      // Process hubs by library using the same logic as hub ordering
+      for (const [libraryId, libraryHubConfigs] of hubConfigsByLibrary) {
+        // Sort hub configs by their sortOrderLibrary (this is our UI order)
+        const sortedHubConfigs = [...libraryHubConfigs].sort((a, b) => 
+          (a.sortOrderLibrary || 0) - (b.sortOrderLibrary || 0)
+        );
+
+        // Add hubs to ordering in UI order
+        if (!orderingItemsByLibrary.has(libraryId)) {
+          orderingItemsByLibrary.set(libraryId, []);
+        }
+
+        sortedHubConfigs.forEach((hubConfig, index) => {
+          orderingItemsByLibrary.get(libraryId)!.push({
+            id: hubConfig.id,
+            type: 'hub',
+            libraryId: hubConfig.libraryId,
+            hubIdentifier: hubConfig.hubIdentifier,
+            sortOrder: index, // Use index position in UI order, not individual sortOrderLibrary values
+          });
+        });
+      }
+
+      // Apply unified ordering to each library
+      for (const [libraryId, orderingItems] of orderingItemsByLibrary) {
+        if (orderingItems.length === 0) continue;
+
+        // Get all available hubs from Plex for this library to include inactive ones
+        const allPlexHubs = await plexClient.getHubManagement(libraryId);
+        const availableHubs = allPlexHubs?.MediaContainer?.Hub || [];
+
+        // Get current hub identifiers that are already managed
+        const managedHubIdentifiers = orderingItems
+          .filter(item => item.type === 'hub')
+          .map(item => item.hubIdentifier);
+
+        // Find ALL unmanaged hubs (both visible and invisible) to add at the end
+        const unmanagedHubs = availableHubs.filter((hub: any) => {
+          // Must not be in our managed list
+          const isNotManaged = !managedHubIdentifiers.includes(hub.identifier);
+          // Must be a built-in hub (not a custom collection)
+          const isBuiltIn = !hub.identifier?.startsWith('custom.collection.');
+          
+          return isNotManaged && isBuiltIn;
+        });
+
+        // Add unmanaged hubs to ordering items (at the bottom)
+        const unmanagedHubOrderingItems = unmanagedHubs.map((hub: any, index: number) => ({
+          id: `unmanaged-${hub.identifier}`,
+          type: 'hub' as const,
+          libraryId,
+          hubIdentifier: hub.identifier,
+          sortOrder: orderingItems.length + index, // Continue sequentially after existing items
+        }));
+
+        // Combine managed items with unmanaged hubs
+        const completeOrderingItems = [...orderingItems, ...unmanagedHubOrderingItems];
+
+        logger.info(`Applying unified ordering for library ${libraryId}`, {
+          label: 'Collections Sync',
+          libraryId,
+          itemCount: completeOrderingItems.length,
+          collections: completeOrderingItems.filter(item => item.type === 'collection').length,
+          hubs: completeOrderingItems.filter(item => item.type === 'hub').length,
+          unmanagedHubsAdded: unmanagedHubOrderingItems.length,
+          hubDetails: completeOrderingItems.filter(item => item.type === 'hub').map(item => ({
+            hubIdentifier: item.hubIdentifier,
+            sortOrder: item.sortOrder
+          })),
+        });
+
+        await applyUnifiedOrderingToPlex(plexClient, completeOrderingItems);
+      }
+
+      logger.info('Unified ordering sync completed', {
+        label: 'Collections Sync',
+        processedLibraries: orderingItemsByLibrary.size,
+        totalItems: Array.from(orderingItemsByLibrary.values()).reduce((sum, items) => sum + items.length, 0),
+      });
+
+    } catch (error) {
+      logger.error(`Unified ordering sync failed: ${extractErrorMessage(error)}`, {
+        label: 'Collections Sync',
+        error: extractErrorMessage(error),
+      });
+      // Don't throw - we don't want ordering sync failures to break collection sync
+    }
+  }
+
+  /**
    * Clean up all Overseerr user labels when no user/server_owner collections are configured
    */
   private async cleanupAllUserFilters(): Promise<void> {
@@ -813,6 +1077,7 @@ class CollectionsSync {
             return `overseerrimdb${c.id}`;
           case 'letterboxd':
             return `overseerrletterboxd${c.id}`;
+          // Note: 'plex' case removed - Plex hubs managed separately via PlexHubConfig
           default:
             return `overseerr${c.type}${c.id}`;
         }

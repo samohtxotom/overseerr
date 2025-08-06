@@ -122,16 +122,30 @@ collectionsRoutes.post(
     try {
       logger.info('Collections API POST request received', {
         label: 'Collections API',
-        body: req.body,
+        body: JSON.stringify(req.body, null, 2),
         hasCollectionConfigs: !!req.body.collectionConfigs,
         collectionsEnabled: req.body.collectionsEnabled,
+        configCount: req.body.collectionConfigs?.length || 0,
       });
 
       const settings = getSettings();
 
       // Update collection configurations
       if (req.body.collectionConfigs) {
+        logger.info('About to update collection configurations', {
+          label: 'Collections API',
+          configCount: req.body.collectionConfigs.length,
+          configs: req.body.collectionConfigs.map((c: any) => ({
+            id: c.id,
+            name: c.name,
+            type: c.type,
+            subtype: c.subtype,
+            libraryId: c.libraryId,
+          })),
+        });
+        
         settings.plex.collectionConfigs = req.body.collectionConfigs;
+        
         logger.info('Updated collection configurations', {
           label: 'Collections API',
           configCount: req.body.collectionConfigs.length,

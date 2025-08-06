@@ -161,9 +161,247 @@ export async function getUserSharedServer(
 
 // Removed: processPlexOperationsBatched function with advanced retry logic
 
+// Helper functions
+
+/**
+ * Generate sort title for collection ordering
+ * Uses exclamation marks to control sort order in Plex
+ */
+export function generateSortTitle(sortOrder: number, totalCollections: number): string {
+  // Calculate prefix: base '!!' + extra '!' characters based on position
+  // Position 1 of 8: '!!!!!!!!' (base + 6 extra), Position 8: '!!' (base only)
+  const extraExclamations = Math.max(0, totalCollections - sortOrder - 1);
+  return '!!' + '!'.repeat(extraExclamations);
+}
+
 // Simple collection management functions (extracted from CollectionsManager)
 
+/**
+ * Incrementally update collection contents while preserving collection metadata
+ * This is the new approach that avoids delete/recreate to preserve Plex statistics
+ */
+export async function updateCollectionContents(
+  user: User,
+  items: any[],
+  mediaType: 'movie' | 'tv',
+  plexClient: PlexAPI,
+  allCollections: any[],
+  visibilityConfig: CollectionVisibilityConfig,
+  customTitle?: string,
+  isGlobalCollection?: boolean,
+  customLabel?: string,
+  processedCollectionKeys?: Set<string>,
+  sortOrderLibrary?: number,
+  totalCollectionsInLibrary?: number,
+  customPoster?: string
+): Promise<{ isNew: boolean; hasChanges: boolean; collectionRatingKey?: string; updateStats?: { added: number; removed: number; reordered: boolean } }> {
+  const collectionTitle = customTitle || generateCollectionTitle(user);
+  const labelName =
+    customLabel ||
+    (isGlobalCollection
+      ? `OverseerrAll${mediaType === 'movie' ? 'Films' : 'TV'}`
+      : `OverseerrUser${user.plexId}`);
+
+  try {
+    // Get library key
+    const settings = getSettings();
+    const enabledLibraries = settings.plex.libraries.filter(
+      (lib) => lib.enabled
+    );
+    const targetType = mediaType === 'movie' ? 'movie' : 'show';
+
+    const matchingLibrary = enabledLibraries.find(
+      (lib) => lib.type === targetType
+    );
+
+    if (!matchingLibrary) {
+      throw new Error(`No enabled ${mediaType} library found`);
+    }
+
+    const libraryKey = matchingLibrary.id;
+
+    // Get actual Plex items using rating keys
+    const ratingKeys = items.map((item) => item.ratingKey);
+    const plexItems = await plexClient.getItemsByRatingKeys(ratingKeys);
+
+    if (plexItems.length === 0) {
+      logger.warn(`No valid Plex items found for collection ${collectionTitle}`, {
+        label: 'Collections Utils',
+        requestedItems: ratingKeys.length,
+      });
+      return { isNew: false, hasChanges: false, collectionRatingKey: undefined };
+    }
+
+    // Find existing collection for this user/label
+    const existingCollection = allCollections.find((collection) => {
+      const hasMatchingLabel =
+        Array.isArray(collection.labels) &&
+        collection.labels.some((label: string) =>
+          label.toLowerCase().includes(labelName.toLowerCase())
+        );
+      const libraryMatches =
+        String(collection.libraryKey) === String(libraryKey);
+
+      return hasMatchingLabel && libraryMatches;
+    });
+
+    let isNew = false;
+    let hasChanges = false;
+    let newCollectionRatingKey: string | null = null;
+    let updateStats = { added: 0, removed: 0, reordered: false };
+
+    if (existingCollection) {
+      // Collection exists - update contents incrementally
+      logger.info(`Updating existing collection: ${collectionTitle}`, {
+        label: 'Collections Utils',
+        collectionRatingKey: existingCollection.ratingKey,
+        newItemCount: plexItems.length,
+      });
+
+      // Use the new incremental update method
+      const updateResult = await plexClient.updateCollectionContents(
+        existingCollection.ratingKey,
+        plexItems
+      );
+
+      updateStats = {
+        added: updateResult.added,
+        removed: updateResult.removed,
+        reordered: updateResult.reordered,
+      };
+
+      hasChanges = updateResult.added > 0 || updateResult.removed > 0 || updateResult.reordered;
+
+      if (updateResult.errors.length > 0) {
+        logger.warn(`Collection update had errors: ${updateResult.errors.join(', ')}`, {
+          label: 'Collections Utils',
+          collectionRatingKey: existingCollection.ratingKey,
+        });
+      }
+
+      // Update collection metadata if needed (title, poster, etc.)
+      if (existingCollection.title !== collectionTitle) {
+        await plexClient.updateCollectionTitle(existingCollection.ratingKey, collectionTitle);
+        hasChanges = true;
+      }
+
+      if (customPoster && existingCollection.poster !== customPoster) {
+        await plexClient.updateCollectionPoster(existingCollection.ratingKey, customPoster);
+        hasChanges = true;
+      }
+
+      // Update visibility (always update since comparison is complex)
+      await plexClient.updateCollectionVisibility(
+        existingCollection.ratingKey,
+        visibilityConfig.libraryRecommended || false,
+        visibilityConfig.serverOwnerHome || false,
+        visibilityConfig.usersHome || false
+      );
+      // Note: We always consider this a change since visibility comparison is complex
+
+      // Update sort order if provided
+      if (typeof sortOrderLibrary === 'number' && typeof totalCollectionsInLibrary === 'number') {
+        await plexClient.updateCollectionSortTitle(
+          existingCollection.ratingKey,
+          generateSortTitle(sortOrderLibrary, totalCollectionsInLibrary)
+        );
+      }
+
+      // Mark as processed
+      if (processedCollectionKeys) {
+        processedCollectionKeys.add(existingCollection.ratingKey);
+      }
+
+      logger.info(`Successfully updated collection: ${collectionTitle}`, {
+        label: 'Collections Utils',
+        collectionRatingKey: existingCollection.ratingKey,
+        added: updateStats.added,
+        removed: updateStats.removed,
+        reordered: updateStats.reordered,
+        hasChanges,
+      });
+
+    } else {
+      // Collection doesn't exist - create new one (fall back to original creation logic)
+      logger.info(`Creating new collection: ${collectionTitle}`, {
+        label: 'Collections Utils',
+        itemCount: plexItems.length,
+      });
+
+      newCollectionRatingKey = await plexClient.createEmptyCollection(
+        collectionTitle,
+        libraryKey,
+        mediaType
+      );
+
+      if (!newCollectionRatingKey) {
+        throw new Error('Failed to create collection');
+      }
+
+      // Add label
+      const labelSuccess = await plexClient.addLabelToCollection(
+        newCollectionRatingKey,
+        labelName
+      );
+      if (!labelSuccess) {
+        // Clean up failed collection
+        await plexClient.deleteCollection(newCollectionRatingKey);
+        throw new Error('Failed to add label to collection');
+      }
+
+      // Add items to new collection
+      await plexClient.addItemsToCollection(newCollectionRatingKey, plexItems);
+
+      // Set custom poster if provided
+      if (customPoster) {
+        await plexClient.updateCollectionPoster(newCollectionRatingKey, customPoster);
+      }
+
+      // Set visibility
+      await plexClient.updateCollectionVisibility(
+        newCollectionRatingKey,
+        visibilityConfig.libraryRecommended || false,
+        visibilityConfig.serverOwnerHome || false,
+        visibilityConfig.usersHome || false
+      );
+
+      // Set sort order if provided
+      if (typeof sortOrderLibrary === 'number' && typeof totalCollectionsInLibrary === 'number') {
+        await plexClient.updateCollectionSortTitle(
+          newCollectionRatingKey,
+          generateSortTitle(sortOrderLibrary, totalCollectionsInLibrary)
+        );
+      }
+
+      // Mark as processed
+      if (processedCollectionKeys) {
+        processedCollectionKeys.add(newCollectionRatingKey);
+      }
+
+      isNew = true;
+      hasChanges = true;
+      updateStats = { added: plexItems.length, removed: 0, reordered: false };
+
+      logger.info(`Successfully created new collection: ${collectionTitle}`, {
+        label: 'Collections Utils',
+        collectionRatingKey: newCollectionRatingKey,
+        itemCount: plexItems.length,
+      });
+    }
+
+    return { isNew, hasChanges, collectionRatingKey: existingCollection?.ratingKey || newCollectionRatingKey, updateStats };
+
+  } catch (error) {
+    logger.error(`Failed to update collection ${collectionTitle}`, {
+      label: 'Collections Utils',
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
+}
+
 /*Delete and recreate a collection with items (simple and fast)
+ * @deprecated Use updateCollectionContents() instead to preserve Plex statistics
  */
 export async function createOrUpdateCollection(
   user: User,

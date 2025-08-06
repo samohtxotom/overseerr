@@ -3,7 +3,7 @@ import { getRepository } from '@server/datasource';
 import { In } from 'typeorm';
 import { MediaRequest } from '@server/entity/MediaRequest';
 import { User } from '@server/entity/User';
-import { createOrUpdateCollection, getAdminUser } from '@server/lib/collectionsUtils';
+import { updateCollectionContents, getAdminUser } from '@server/lib/collectionsUtils';
 import type { CollectionConfig } from '@server/lib/settings';
 import logger from '@server/logger';
 import { BaseCollectionSync } from './BaseCollectionSync';
@@ -127,7 +127,7 @@ export class OverseerrCollectionSync extends BaseCollectionSync {
       if (movieItems.length > 0 && (config.mediaType === 'both' || config.mediaType === 'movie')) {
         const movieCollectionName = this.createServerOwnerCollectionName(fullAdminUser, config, 'movie');
         
-        const result = await createOrUpdateCollection(
+        const result = await updateCollectionContents(
           fullAdminUser,
           movieItems.slice(0, config.maxItems || 1000),
           'movie',
@@ -154,7 +154,7 @@ export class OverseerrCollectionSync extends BaseCollectionSync {
       if (tvItems.length > 0 && (config.mediaType === 'both' || config.mediaType === 'tv')) {
         const tvCollectionName = this.createServerOwnerCollectionName(fullAdminUser, config, 'tv');
         
-        const result = await createOrUpdateCollection(
+        const result = await updateCollectionContents(
           fullAdminUser,
           tvItems.slice(0, config.maxItems || 1000),
           'tv',
@@ -232,7 +232,7 @@ export class OverseerrCollectionSync extends BaseCollectionSync {
             'movie'
           );
           
-          const result = await createOrUpdateCollection(
+          const result = await updateCollectionContents(
             user,
             movieItems,
             'movie',
@@ -263,7 +263,7 @@ export class OverseerrCollectionSync extends BaseCollectionSync {
             'tv'
           );
           
-          const result = await createOrUpdateCollection(
+          const result = await updateCollectionContents(
             user,
             tvItems,
             'tv',
@@ -677,7 +677,7 @@ export class OverseerrCollectionSync extends BaseCollectionSync {
       const customLabel = this.createLabelForSubtype(config, userContext);
 
 
-      const result = await createOrUpdateCollection(
+      const result = await updateCollectionContents(
         userContext,
         items,
         mediaType,

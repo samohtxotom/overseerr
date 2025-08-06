@@ -13,19 +13,27 @@ import type { CollectionConfig, Library } from './types';
 export function groupConfigsByLibrary(
   configs: CollectionConfig[],
   libraries: Library[],
-  activeTab: 'home' | 'library' = 'home'
+  activeTab: 'home' | 'recommended' | 'library' | 'inactive' | 'unmanaged' = 'home'
 ): Map<string, CollectionConfig[]> {
   const libraryGroups = new Map<string, CollectionConfig[]>();
   
   // First, handle configs with specific library IDs
   for (const config of configs) {
-    if (config.libraryId && config.libraryId !== 'all') {
-      // This is a config for a specific library
-      if (!libraryGroups.has(config.libraryId)) {
-        libraryGroups.set(config.libraryId, []);
+    // Handle new libraryIds array format
+    const libraryIds = config.libraryIds || (config.libraryId ? (Array.isArray(config.libraryId) ? config.libraryId : [config.libraryId]) : []);
+    const hasAllLibraries = libraryIds.includes('all') || config.libraryId === 'all';
+    const hasSpecificLibraries = libraryIds.some(id => id !== 'all');
+    
+    if (hasSpecificLibraries) {
+      // This config targets specific libraries
+      const specificLibraryIds = libraryIds.filter(id => id !== 'all');
+      for (const libraryId of specificLibraryIds) {
+        if (!libraryGroups.has(libraryId)) {
+          libraryGroups.set(libraryId, []);
+        }
+        libraryGroups.get(libraryId)!.push(config);
       }
-      libraryGroups.get(config.libraryId)!.push(config);
-    } else if (config.libraryId === 'all' && !config.isExpandedConfig) {
+    } else if (hasAllLibraries && !config.isExpandedConfig) {
       // This is a template config that applies to all libraries
       // For UI purposes, we show it under each compatible library
       const enabledLibraries = libraries.filter(lib => lib.enabled);
@@ -52,7 +60,7 @@ export function groupConfigsByLibrary(
             ? ((config as any)[sortOrderHomeKey] ?? config.sortOrderHome ?? 0)
             : (config.sortOrderHome ?? 0);
             
-          const librarySpecificSortOrderLibrary = activeTab === 'library'
+          const librarySpecificSortOrderLibrary = (activeTab === 'library' || activeTab === 'recommended')
             ? ((config as any)[sortOrderLibraryKey] ?? config.sortOrderLibrary ?? 0)
             : ((config as any)[sortOrderLibraryKey] ?? config.sortOrderLibrary ?? 0);
             
@@ -80,10 +88,11 @@ export function groupConfigsByLibrary(
       let aSortOrder: number;
       let bSortOrder: number;
       
-      if (activeTab === 'library') {
+      if (activeTab === 'library' || activeTab === 'recommended') {
         aSortOrder = a.sortOrderLibrary ?? 0;
         bSortOrder = b.sortOrderLibrary ?? 0;
       } else {
+        // For home and inactive tabs, use home sort order
         aSortOrder = a.sortOrderHome ?? 0;
         bSortOrder = b.sortOrderHome ?? 0;
       }
@@ -112,17 +121,23 @@ export function updateConfigsAfterReorder(
     let originalIndex = -1;
     
     // Find the matching original config
-    // The reorderedConfig might have a specific libraryId but the original might have 'all'
+    // Handle both old libraryId and new libraryIds array formats
     originalIndex = updatedConfigs.findIndex(config => {
       // Exact match first (specific library configs)
-      if (config.id === reorderedConfig.id && config.libraryId === reorderedConfig.libraryId) {
-        return true;
-      }
+      const configLibraryIds = config.libraryIds || (config.libraryId ? (Array.isArray(config.libraryId) ? config.libraryId : [config.libraryId]) : []);
+      const reorderedLibraryIds = reorderedConfig.libraryIds || (reorderedConfig.libraryId ? (Array.isArray(reorderedConfig.libraryId) ? reorderedConfig.libraryId : [reorderedConfig.libraryId]) : []);
       
-      // For display configs from 'all' library configs, match by original ID
-      // The original config has libraryId: 'all', but the reordered config has a specific library ID
-      if (config.id === reorderedConfig.id && config.libraryId === 'all') {
-        return true;
+      if (config.id === reorderedConfig.id) {
+        // Check for exact library ID match
+        const hasMatchingLibrary = configLibraryIds.some(id => reorderedLibraryIds.includes(id));
+        if (hasMatchingLibrary) {
+          return true;
+        }
+        
+        // For display configs from 'all' library configs, match by original ID
+        if (configLibraryIds.includes('all') || config.libraryId === 'all') {
+          return true;
+        }
       }
       
       return false;
@@ -279,7 +294,7 @@ export function getCompatibleLibraries(libraries: Library[], mediaType?: string)
 /**
  * Generate a consistent color for All Libraries badge based on collection ID
  */
-export function getAllLibrariesBadgeColor(configId: number): string {
+export function getAllLibrariesBadgeColor(configId: number | string): string {
   // Generate consistent colors based on config ID
   const colors = [
     'bg-purple-500/40 text-purple-200',
@@ -294,7 +309,9 @@ export function getAllLibrariesBadgeColor(configId: number): string {
     'bg-cyan-500/40 text-cyan-200'
   ];
   
-  return colors[configId % colors.length];
+  // Handle both number and string IDs
+  const numericId = typeof configId === 'string' ? configId.charCodeAt(0) : configId;
+  return colors[numericId % colors.length];
 }
 
 /**

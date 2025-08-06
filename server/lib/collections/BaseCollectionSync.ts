@@ -23,6 +23,7 @@ import type {
 } from './types';
 import { CollectionSyncErrorType } from './types';
 import { TimeRestrictionUtils } from './TimeRestrictionUtils';
+import { CollectionConfigUpdater } from './CollectionConfigUpdater';
 
 /**
  * Abstract base class for all collection sync implementations
@@ -326,6 +327,18 @@ export abstract class BaseCollectionSync implements CollectionSyncInterface {
       removed: original - filtered,
       removalReasons,
     };
+  }
+
+  /**
+   * Update collection config with Plex rating key after collection operation
+   */
+  protected updateConfigWithRatingKey(config: CollectionConfig, collectionRatingKey?: string): void {
+    if (collectionRatingKey && typeof config.id === 'number') {
+      // Extract library ID from config for multi-library support
+      // Handle both single string and array formats
+      const libraryId = Array.isArray(config.libraryId) ? config.libraryId[0] : config.libraryId;
+      CollectionConfigUpdater.updateConfigWithRatingKey(config.id, collectionRatingKey, libraryId);
+    }
   }
 
   // Abstract methods that must be implemented by subclasses
