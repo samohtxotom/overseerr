@@ -31,7 +31,44 @@ export function groupConfigsByLibrary(
         if (!libraryGroups.has(libraryId)) {
           libraryGroups.set(libraryId, []);
         }
-        libraryGroups.get(libraryId)!.push(config);
+        
+        // Find the library object to process library-specific settings
+        const library = libraries.find(lib => lib.id === libraryId);
+        if (library) {
+          // For specific library configs, we still need to process templates and media types
+          // especially when mediaType is 'both'
+          const librarySpecificMediaType = config.mediaType === 'both' 
+            ? (library.type === 'movie' ? 'movie' : 'tv')
+            : config.mediaType;
+          
+          // Create library-specific sort order keys for this specific config
+          const sortOrderHomeKey = `${library.id}_sortOrderHome` as keyof CollectionConfig;
+          const sortOrderLibraryKey = `${library.id}_sortOrderLibrary` as keyof CollectionConfig;
+          
+          // Get library-specific sort orders
+          const librarySpecificSortOrderHome = activeTab === 'home' 
+            ? ((config as any)[sortOrderHomeKey] ?? config.sortOrderHome ?? 0)
+            : (config.sortOrderHome ?? 0);
+            
+          const librarySpecificSortOrderLibrary = (activeTab === 'library' || activeTab === 'recommended')
+            ? ((config as any)[sortOrderLibraryKey] ?? config.sortOrderLibrary ?? 0)
+            : ((config as any)[sortOrderLibraryKey] ?? config.sortOrderLibrary ?? 0);
+          
+          const displayConfig: CollectionConfig = {
+            ...config,
+            libraryId: library.id,
+            libraryName: library.name,
+            mediaType: librarySpecificMediaType, // Override with library-specific type
+            sortOrderHome: librarySpecificSortOrderHome,
+            sortOrderLibrary: librarySpecificSortOrderLibrary,
+            name: processTemplateForLibrary(config, library, librarySpecificMediaType || 'both')
+          };
+          
+          libraryGroups.get(libraryId)!.push(displayConfig);
+        } else {
+          // Fallback: push original config if library not found
+          libraryGroups.get(libraryId)!.push(config);
+        }
       }
     } else if (hasAllLibraries && !config.isExpandedConfig) {
       // This is a template config that applies to all libraries
@@ -88,11 +125,10 @@ export function groupConfigsByLibrary(
       let aSortOrder: number;
       let bSortOrder: number;
       
-      if (activeTab === 'library' || activeTab === 'recommended') {
+      if (activeTab === 'library') {
         aSortOrder = a.sortOrderLibrary ?? 0;
         bSortOrder = b.sortOrderLibrary ?? 0;
       } else {
-        // For home and inactive tabs, use home sort order
         aSortOrder = a.sortOrderHome ?? 0;
         bSortOrder = b.sortOrderHome ?? 0;
       }
@@ -315,15 +351,43 @@ export function getAllLibrariesBadgeColor(configId: number | string): string {
 }
 
 /**
- * Check if a config is an "All Libraries" config (expanded from a parent with libraryId: 'all')
+ * Check if a config is part of a linked collection group
+ * (multiple collections with same type/subtype, regardless of library selection method)
+ */
+export function isLinkedCollection(config: CollectionConfig, originalConfigs: CollectionConfig[]): boolean {
+  // Find configs with the same type/subtype
+  const sameTypeConfigs = originalConfigs.filter(orig => 
+    orig.type === config.type && 
+    orig.subtype === config.subtype
+  );
+  
+  // Case 1: Multiple configs of the same type/subtype = linked
+  if (sameTypeConfigs.length > 1) {
+    return true;
+  }
+  
+  // Case 2: Single config that applies to 'all' libraries = linked
+  // (creates display configs across multiple libraries)
+  if (sameTypeConfigs.length === 1) {
+    const matchingConfig = sameTypeConfigs[0];
+    const libraryIds = matchingConfig.libraryIds || 
+      (matchingConfig.libraryId ? 
+        (Array.isArray(matchingConfig.libraryId) ? matchingConfig.libraryId : [matchingConfig.libraryId]) 
+        : []);
+    
+    // If the config targets 'all' libraries or multiple specific libraries, it's linked
+    return libraryIds.includes('all') || libraryIds.length > 1;
+  }
+  
+  return false;
+}
+
+/**
+ * @deprecated Use isLinkedCollection instead
+ * Backward compatibility alias
  */
 export function isAllLibrariesConfig(config: CollectionConfig, originalConfigs: CollectionConfig[]): boolean {
-  // Check if there's an original config with the same ID but libraryId: 'all'
-  return originalConfigs.some(orig => 
-    orig.id === config.id && 
-    orig.libraryId === 'all' && 
-    config.libraryId !== 'all'
-  );
+  return isLinkedCollection(config, originalConfigs);
 }
 
 /**

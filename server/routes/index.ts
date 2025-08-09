@@ -28,6 +28,7 @@ import issueRoutes from './issue';
 import issueCommentRoutes from './issueComment';
 import mediaRoutes from './media';
 import movieRoutes from './movie';
+import overseerrRoutes from './overseerr';
 import personRoutes from './person';
 import requestRoutes from './request';
 import searchRoutes from './search';
@@ -139,6 +140,7 @@ router.get(
   }
 );
 router.use('/settings', isAuthenticated(Permission.ADMIN), settingsRoutes);
+router.use('/overseerr', isAuthenticated(), overseerrRoutes);
 router.use('/search', isAuthenticated(), searchRoutes);
 router.use('/discover', isAuthenticated(), discoverRoutes);
 router.use('/request', isAuthenticated(), requestRoutes);

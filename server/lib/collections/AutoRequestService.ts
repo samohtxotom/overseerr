@@ -6,6 +6,7 @@ import type { CollectionConfig } from '@server/lib/settings';
 import type { MissingItem, AutoRequestResult } from './types';
 import type { ServiceUserConfig } from './ServiceUserManager';
 import { ServiceUserManager, SERVICE_USER_CONFIGS } from './ServiceUserManager';
+import { COLLECTION_LIMITS } from './ConfigurationConstants';
 
 /**
  * Shared auto-request service for all collection sync implementations
@@ -89,7 +90,7 @@ export class AutoRequestService {
       let manualApprovalRequests = 0;
       let alreadyRequestedCount = 0;
       let skippedRequests = 0;
-      const maxSeasons = config.maxSeasonsToRequest || 3;
+      const maxSeasons = config.maxSeasonsToRequest || COLLECTION_LIMITS.AUTO_REQUEST.MAX_SEASONS;
 
       for (const item of filteredMissingItems) {
         try {

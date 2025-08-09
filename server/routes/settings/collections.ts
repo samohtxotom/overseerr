@@ -742,4 +742,91 @@ collectionsRoutes.delete('/poster/:filename', async (req, res) => {
   }
 });
 
+// GET /api/v1/settings/plex/collections/preexisting - Get pre-existing Plex collections (non-Overseerr)
+collectionsRoutes.get('/preexisting', isAuthenticated(Permission.ADMIN), async (_req, res) => {
+  try {
+    const settings = getSettings().load();
+    
+    if (!settings.plex.ip || !settings.plex.port) {
+      return res.status(400).json({
+        error: 'Plex server not configured',
+      });
+    }
+
+    // Get admin user for Plex token
+    const userRepository = getRepository(User);
+    const adminUser = await userRepository.findOne({
+      where: { id: 1 },
+      select: ['id', 'plexToken'],
+    });
+
+    if (!adminUser?.plexToken) {
+      return res.status(400).json({
+        error: 'No Plex token found for admin user',
+      });
+    }
+
+    const plexClient = new PlexAPI({
+      plexToken: adminUser.plexToken,
+      plexSettings: settings.plex,
+    });
+
+    // Test connection
+    const statusResult = await plexClient.getStatus();
+    if (!statusResult) {
+      return res.status(500).json({
+        error: 'Unable to connect to Plex server',
+      });
+    }
+
+    // Get all collections from Plex
+    const allCollections = await plexClient.getAllCollections();
+    
+    // Filter out collections that have Overseerr labels (case insensitive)
+    const preExistingCollections = allCollections.filter(
+      (collection: any) => {
+        // Collections WITHOUT Overseerr labels are pre-existing
+        return !(
+          Array.isArray(collection.labels) &&
+          collection.labels.some((label: string) =>
+            label.toLowerCase().startsWith('overseerr')
+          )
+        );
+      }
+    );
+
+    logger.info(`Found ${preExistingCollections.length} pre-existing Plex collections`, {
+      label: 'Collections API',
+      totalCollections: allCollections.length,
+      preExistingCount: preExistingCollections.length,
+    });
+
+    return res.status(200).json({
+      collections: preExistingCollections.map((collection: any) => ({
+        id: collection.ratingKey,
+        name: collection.title,
+        summary: collection.summary || '',
+        libraryId: collection.librarySectionID,
+        libraryTitle: collection.librarySectionTitle,
+        itemCount: collection.childCount || 0,
+        thumb: collection.thumb || '',
+        art: collection.art || '',
+        guid: collection.guid || '',
+        updatedAt: collection.updatedAt,
+        addedAt: collection.addedAt,
+        labels: collection.labels || [],
+      })),
+    });
+  } catch (error) {
+    logger.error('Failed to fetch pre-existing collections', {
+      label: 'Collections API',
+      error: error instanceof Error ? error.message : String(error),
+    });
+
+    return res.status(500).json({
+      error: 'Failed to fetch pre-existing collections',
+    });
+  }
+});
+
 export default collectionsRoutes;

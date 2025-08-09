@@ -6,8 +6,6 @@ import PageTitle from '@app/components/Common/PageTitle';
 import SensitiveInput from '@app/components/Common/SensitiveInput';
 import LibraryItem from '@app/components/Settings/LibraryItem';
 import SettingsBadge from '@app/components/Settings/SettingsBadge';
-import CollectionSettings from '@app/components/Settings/Collections/CollectionSettings';
-import type { CollectionConfig } from '@app/components/Settings/Collections/types';
 import globalMessages from '@app/i18n/globalMessages';
 import { ArrowDownOnSquareIcon } from '@heroicons/react/24/outline';
 import {
@@ -17,6 +15,7 @@ import {
 } from '@heroicons/react/24/solid';
 import type { PlexDevice } from '@server/interfaces/api/plexInterfaces';
 import type {
+  OverseerrSettings,
   PlexSettings,
   TautulliSettings,
   TraktSettings,
@@ -25,7 +24,7 @@ import axios from 'axios';
 import { Field, Formik } from 'formik';
 import { orderBy } from 'lodash';
 import type React from 'react';
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { defineMessages, useIntl } from 'react-intl';
 import { useToasts } from 'react-toast-notifications';
 import useSWR from 'swr';
@@ -86,6 +85,22 @@ const messages = defineMessages({
   toastTautulliSettingsSuccess: 'Tautulli settings saved successfully!',
   toastTautulliSettingsFailure:
     'Something went wrong while saving Tautulli settings.',
+  overseerrSettings: 'Overseerr Connection Settings',
+  overseerrSettingsDescription:
+    'Configure connection to your external Overseerr instance for request management and user synchronization.',
+  overseerrHostname: 'Hostname or IP Address',
+  overseerrPort: 'Port',
+  overseerrApiKey: 'API Key',
+  overseerrApiKeyTip: 'Get your API key from Overseerr Settings > General > API Key',
+  overseerrUseSsl: 'Use SSL',
+  overseerrUrlBase: 'URL Base',
+  overseerrExternalUrl: 'External URL',
+  testOverseerrConnection: 'Test Connection',
+  overseerrConnectionSuccess: 'Connected to Overseerr successfully!',
+  overseerrConnectionFailure: 'Failed to connect to Overseerr',
+  toastOverseerrSettingsSuccess: 'Overseerr settings saved successfully!',
+  toastOverseerrSettingsFailure:
+    'Something went wrong while saving Overseerr settings.',
   traktSettings: 'Trakt Settings',
   traktSettingsDescription:
     'Configure your Trakt API key to enable Trakt-based collections from trending and popular lists.',
@@ -94,99 +109,6 @@ const messages = defineMessages({
   toastTraktSettingsSuccess: 'Trakt settings saved successfully!',
   toastTraktSettingsFailure:
     'Something went wrong while saving Trakt settings.',
-  collectionsEnabled: 'Enable Collections',
-  collectionsPlexPassRequired: 'Plex Pass required for full functionality',
-  collectionsPlexPassWarning:
-    'Collections require Plex Pass for labels and user filtering, without Plex Pass, all collections will be visible to all users.',
-  collectionsPlexPassCheckFailed: 'Unable to verify Plex Pass status',
-  collectionsEnabledDescription:
-    'Create Plex collections in the Library tab for each user with their available requests, only visible to the user. Note: Uses label restrictions, all collections will be visible to admin',
-  plexcollections: 'Plex Collections',
-  plexcollectionsDescription:
-    'Create Collections in Plex from various sources including Overseerr Requests, Tautulli Statistics and Trakt lists. Runs as a job every 12 hours',
-  enableCollections: 'Enable Collections',
-  disableCollections: 'Disable Collections',
-  removingCollectionsAndLabels: 'Removing Collections & Labels...',
-  verifyingPlexPass: 'Checking Plex Pass…',
-  plexPassVerified: 'Plex Pass verified successfully!',
-  overrideAndEnable: 'Override and Enable Collections',
-  plexPassRequired: 'WARNING: Your users privacy is at risk',
-  plexPassRequiredDescription:
-    'Collections titles can contain Usernames or Full Names, without Plex Pass, visibility cannot be restricted to only the applicable user.',
-  collectionTemplate: 'Collection Name Template',
-  collectionTemplateHelp:
-    'Available variables: {nickname} - Full Name, {username} - Plex Username, {domain} - Application URL, {appTitle} - Application Title',
-  collectionTemplateUserRequired:
-    'Template must include {user}, {username}, or {nickname} variable',
-  collectionTemplatePreview: 'Preview',
-  collectionTemplatePresets: 'Presets',
-  collectionTemplateCustom: 'Custom',
-  collectionsActive: '✓ Active',
-  collectionsOverrideWarning: '(Override - visible to all users)',
-  toastCollectionsEnabled: 'Collections enabled successfully!',
-  toastPlexPassVerified: 'Plex Pass verified successfully!',
-  toastPlexPassNotDetected: 'Plex Pass not detected',
-  toastCollectionsSyncStarted: 'Collections sync started successfully!',
-  toastCollectionsDisabledSuccess:
-    'Collections disabled and purged successfully!',
-  toastCollectionsSyncSkipped:
-    'Collections disabled -  enable Collections in Plex Settings to run.',
-  globalCollectionEnabled: 'Create Global Collection',
-  globalCollectionEnabledDescription:
-    'Creates a single collection visible to all users containing all approved requests from everyone, sorted by request date.',
-  collectionConfigurations: 'Collection Configurations',
-  collectionConfigurationsDescription:
-    'Configure automated collections from external sources like Tautulli statistics and Trakt trending lists. Each configuration creates a separate collection in Plex.',
-  addCollectionConfig: 'Add Collection Configuration',
-  editCollectionConfig: 'Edit Collection Configuration',
-  deleteCollectionConfig: 'Delete Collection Configuration',
-  collectionConfigName: 'Collection Name',
-  collectionConfigType: 'Collection Type',
-  collectionConfigEnabled: 'Enabled',
-  collectionConfigTemplate: 'Collection Title Template',
-  collectionConfigMaxItems: 'Maximum Items',
-  collectionConfigMediaType: 'Library',
-  collectionConfigPeriod: 'Time Period',
-  collectionConfigTraktApiKey: 'Trakt API Key',
-  collectionConfigTraktStatType: 'Trakt List Type',
-  collectionConfigSearchMissingMovies: 'Auto-request Missing Movies',
-  collectionConfigSearchMissingTV: 'Auto-request Missing TV Shows',
-  collectionConfigAutoApproveMovies: 'Auto-approve Movies',
-  collectionConfigAutoApproveTV: 'Auto-approve TV Shows',
-  collectionConfigMaxSeasons:
-    'Require manual approval for more than this many seasons',
-  collectionConfigSearchMoviesDescription:
-    'Automatically create requests for missing movies',
-  collectionConfigSearchTVDescription:
-    'Automatically create requests for missing TV shows',
-  collectionConfigAutoApproveMoviesDescription:
-    'Automatically approve movie requests (no admin review required)',
-  collectionConfigAutoApproveTVDescription:
-    'Automatically approve TV show requests (no admin review required)',
-  collectionConfigMaxSeasonsDescription:
-    'TV shows with more seasons will require manual admin approval',
-  collectionConfigSortOrder: 'Sort Order',
-  collectionTypeUser: 'User Collections',
-  collectionTypeGlobal: 'Global Collection',
-  collectionTypeTautulli: 'Tautulli Statistics',
-  collectionTypeTrakt: 'Trakt Lists',
-  traktStatTypeTrending: 'Trending',
-  traktStatTypePopular: 'Popular',
-  traktStatTypeWatched: 'Most Watched',
-  mediaTypeMovie: 'Movies Only',
-  mediaTypeTv: 'TV Shows Only',
-  mediaTypeBoth: 'Movies & TV Shows',
-  periodWeek: 'This Week',
-  periodMonth: 'This Month',
-  saveCollectionConfig: 'Save Configuration',
-  cancelCollectionConfig: 'Cancel',
-  deleteCollectionConfigConfirm:
-    'Are you sure you want to delete this collection configuration?',
-  noCollectionConfigs:
-    'No collection configurations found. Add one to get started.',
-  collectionConfigSaved: 'Collection configuration saved successfully!',
-  collectionConfigDeleted: 'Collection configuration deleted successfully!',
-  collectionConfigError: 'Failed to save collection configuration.',
 });
 
 interface Library {
@@ -232,14 +154,13 @@ const SettingsPlex = ({ onComplete }: SettingsPlexProps) => {
   } = useSWR<PlexSettings>('/api/v1/settings/plex');
   const { data: dataTautulli, mutate: revalidateTautulli } =
     useSWR<TautulliSettings>('/api/v1/settings/tautulli');
+  const { data: dataOverseerr, mutate: revalidateOverseerr } = useSWR<OverseerrSettings>(
+    '/api/v1/settings/overseerr'
+  );
+
   const { data: dataTrakt, mutate: revalidateTrakt } = useSWR<TraktSettings>(
     '/api/v1/settings/trakt'
   );
-
-  // Collection configuration states
-  const [collectionConfigs, setCollectionConfigs] = useState<
-    CollectionConfig[]
-  >([]);
 
   const { data: dataSync, mutate: revalidateSync } = useSWR<SyncStatus>(
     '/api/v1/settings/plex/sync',
@@ -248,38 +169,8 @@ const SettingsPlex = ({ onComplete }: SettingsPlexProps) => {
     }
   );
 
-  // Initialize collection configs from data
-  useEffect(() => {
-    if (data?.collectionConfigs) {
-      setCollectionConfigs(data.collectionConfigs);
-    }
-  }, [data?.collectionConfigs]);
-
-  // No need for collections status polling anymore
   const intl = useIntl();
   const { addToast, removeToast } = useToasts();
-
-  // Helper function to start collections sync in background
-  const startCollectionsSync = async () => {
-    try {
-      const response = await axios.post(
-        '/api/v1/settings/plex/collections/sync'
-      );
-      addToast(
-        response.data.message || 'Collections sync started in background',
-        {
-          autoDismiss: true,
-          appearance: 'success',
-        }
-      );
-    } catch (error) {
-      addToast('Failed to start collections sync', {
-        autoDismiss: true,
-        appearance: 'error',
-      });
-      throw error;
-    }
-  };
 
   const PlexSettingsSchema = Yup.object().shape({
     hostname: Yup.string()
@@ -351,6 +242,63 @@ const SettingsPlex = ({ onComplete }: SettingsPlexProps) => {
       ['tautulliHostname', 'tautulliPort'],
       ['tautulliHostname', 'tautulliApiKey'],
       ['tautulliPort', 'tautulliApiKey'],
+    ]
+  );
+
+  const OverseerrSettingsSchema = Yup.object().shape(
+    {
+      overseerrHostname: Yup.string()
+        .when(['overseerrPort', 'overseerrApiKey'], {
+          is: (value: unknown) => !!value,
+          then: Yup.string()
+            .nullable()
+            .required(intl.formatMessage(messages.validationHostnameRequired)),
+          otherwise: Yup.string().nullable(),
+        })
+        .matches(
+          /^((?!-)[a-z0-9-]{1,63}(?<!-)\.)+[a-z]{2,6}$|^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$|^[a-zA-Z0-9\-\.]+$/,
+          intl.formatMessage(messages.validationHostnameRequired)
+        ),
+      overseerrPort: Yup.number()
+        .nullable()
+        .when(['overseerrHostname', 'overseerrApiKey'], {
+          is: (value: unknown) => !!value,
+          then: Yup.number()
+            .nullable()
+            .required(intl.formatMessage(messages.validationPortRequired)),
+          otherwise: Yup.number().nullable(),
+        }),
+      overseerrUrlBase: Yup.string()
+        .nullable()
+        .test(
+          'leading-slash',
+          intl.formatMessage(messages.validationUrlBaseLeadingSlash),
+          (value) => !value || value.startsWith('/')
+        )
+        .test(
+          'no-trailing-slash',
+          intl.formatMessage(messages.validationUrlBaseTrailingSlash),
+          (value) => !value || !value.endsWith('/')
+        ),
+      overseerrApiKey: Yup.string().when(['overseerrHostname', 'overseerrPort'], {
+        is: (value: unknown) => !!value,
+        then: Yup.string()
+          .nullable()
+          .required(intl.formatMessage(messages.validationApiKey)),
+        otherwise: Yup.string().nullable(),
+      }),
+      overseerrExternalUrl: Yup.string()
+        .url(intl.formatMessage(messages.validationUrl))
+        .test(
+          'no-trailing-slash',
+          intl.formatMessage(messages.validationUrlTrailingSlash),
+          (value) => !value || !value.endsWith('/')
+        ),
+    },
+    [
+      ['overseerrHostname', 'overseerrPort'],
+      ['overseerrHostname', 'overseerrApiKey'],
+      ['overseerrPort', 'overseerrApiKey'],
     ]
   );
 
@@ -883,42 +831,270 @@ const SettingsPlex = ({ onComplete }: SettingsPlexProps) => {
           </div>
         </div>
 
-        <div className="mt-10 mb-6">
-          <h3 className="heading">
-            {intl.formatMessage(messages.plexcollections)}
-          </h3>
-          <p className="description" data-testid="collections-sync-description">
-            {intl.formatMessage(messages.plexcollectionsDescription)}
-          </p>
-        </div>
-        <div className="section" data-testid="collections-sync-section">
-          <div className="space-y-6">
-            {/* Collections Management */}
-            <CollectionSettings
-              collectionConfigs={collectionConfigs}
-              onUpdateConfigs={setCollectionConfigs}
-            />
-
-            {/* Manual Sync Button */}
-            <div className="mt-6 border-t border-gray-700 pt-4">
-              <div className="flex items-center justify-between">
-                <div></div>
-                <Button
-                  buttonType="primary"
-                  onClick={startCollectionsSync}
-                  data-testid="manual-collections-sync-button"
-                >
-                  <ArrowPathIcon className="h-4 w-4" />
-                  <span>Sync Collections</span>
-                </Button>
-              </div>
-            </div>
-          </div>
-        </div>
       </div>
 
       {!onComplete && (
         <>
+          <div className="mt-10 mb-6">
+            <h3 className="heading">
+              {intl.formatMessage(messages.overseerrSettings)}
+            </h3>
+            <p className="description">
+              {intl.formatMessage(messages.overseerrSettingsDescription)}
+            </p>
+          </div>
+          <Formik
+            initialValues={{
+              overseerrHostname: dataOverseerr?.hostname,
+              overseerrPort: dataOverseerr?.port ?? 5055,
+              overseerrUseSsl: dataOverseerr?.useSsl,
+              overseerrUrlBase: dataOverseerr?.urlBase,
+              overseerrApiKey: dataOverseerr?.apiKey,
+              overseerrExternalUrl: dataOverseerr?.externalUrl,
+            }}
+            validationSchema={OverseerrSettingsSchema}
+            onSubmit={async (values) => {
+              try {
+                await axios.post('/api/v1/settings/overseerr', {
+                  hostname: values.overseerrHostname,
+                  port: Number(values.overseerrPort),
+                  useSsl: values.overseerrUseSsl,
+                  urlBase: values.overseerrUrlBase,
+                  apiKey: values.overseerrApiKey,
+                  externalUrl: values.overseerrExternalUrl,
+                } as OverseerrSettings);
+
+                addToast(
+                  intl.formatMessage(messages.toastOverseerrSettingsSuccess),
+                  {
+                    autoDismiss: true,
+                    appearance: 'success',
+                  }
+                );
+                revalidateOverseerr();
+              } catch (e) {
+                addToast(
+                  intl.formatMessage(messages.toastOverseerrSettingsFailure),
+                  {
+                    autoDismiss: true,
+                    appearance: 'error',
+                  }
+                );
+              }
+            }}
+            enableReinitialize
+          >
+            {({
+              errors,
+              touched,
+              values,
+              handleSubmit,
+              setFieldValue,
+              isSubmitting,
+              isValid,
+            }) => {
+              const testConnection = async () => {
+                if (!values.overseerrHostname || !values.overseerrPort || !values.overseerrApiKey) {
+                  return;
+                }
+
+                try {
+                  const response = await axios.post('/api/v1/overseerr/test', {
+                    hostname: values.overseerrHostname,
+                    port: values.overseerrPort,
+                    apiKey: values.overseerrApiKey,
+                    useSsl: values.overseerrUseSsl,
+                    urlBase: values.overseerrUrlBase,
+                  });
+
+                  if (response.data.success) {
+                    addToast(
+                      `${intl.formatMessage(messages.overseerrConnectionSuccess)} (v${response.data.version || 'unknown'})`,
+                      {
+                        autoDismiss: true,
+                        appearance: 'success',
+                      }
+                    );
+                  } else {
+                    addToast(intl.formatMessage(messages.overseerrConnectionFailure), {
+                      autoDismiss: true,
+                      appearance: 'error',
+                    });
+                  }
+                } catch (e) {
+                  addToast(intl.formatMessage(messages.overseerrConnectionFailure), {
+                    autoDismiss: true,
+                    appearance: 'error',
+                  });
+                }
+              };
+
+              return (
+                <form className="section" onSubmit={handleSubmit}>
+                  <div className="form-row">
+                    <label htmlFor="overseerrHostname" className="text-label">
+                      {intl.formatMessage(messages.overseerrHostname)}
+                      <span className="label-required">*</span>
+                    </label>
+                    <div className="form-input-area">
+                      <div className="form-input-field">
+                        <span className="inline-flex cursor-default items-center rounded-l-md border border-r-0 border-gray-500 bg-gray-800 px-3 text-gray-100 sm:text-sm">
+                          {values.overseerrUseSsl ? 'https://' : 'http://'}
+                        </span>
+                        <Field
+                          type="text"
+                          inputMode="url"
+                          id="overseerrHostname"
+                          name="overseerrHostname"
+                          className="rounded-r-only"
+                          placeholder="overseerr.example.com"
+                        />
+                      </div>
+                      {errors.overseerrHostname &&
+                        touched.overseerrHostname &&
+                        typeof errors.overseerrHostname === 'string' && (
+                          <div className="error">{errors.overseerrHostname}</div>
+                        )}
+                    </div>
+                  </div>
+                  <div className="form-row">
+                    <label htmlFor="overseerrPort" className="text-label">
+                      {intl.formatMessage(messages.overseerrPort)}
+                      <span className="label-required">*</span>
+                    </label>
+                    <div className="form-input-area">
+                      <Field
+                        type="text"
+                        inputMode="numeric"
+                        id="overseerrPort"
+                        name="overseerrPort"
+                        placeholder="5055"
+                        className="short"
+                      />
+                      {errors.overseerrPort &&
+                        touched.overseerrPort &&
+                        typeof errors.overseerrPort === 'string' && (
+                          <div className="error">{errors.overseerrPort}</div>
+                        )}
+                    </div>
+                  </div>
+                  <div className="form-row">
+                    <label htmlFor="overseerrUseSsl" className="checkbox-label">
+                      {intl.formatMessage(messages.overseerrUseSsl)}
+                    </label>
+                    <div className="form-input-area">
+                      <Field
+                        type="checkbox"
+                        id="overseerrUseSsl"
+                        name="overseerrUseSsl"
+                        onChange={() => {
+                          setFieldValue(
+                            'overseerrUseSsl',
+                            !values.overseerrUseSsl
+                          );
+                        }}
+                      />
+                    </div>
+                  </div>
+                  <div className="form-row">
+                    <label htmlFor="overseerrUrlBase" className="text-label">
+                      {intl.formatMessage(messages.overseerrUrlBase)}
+                    </label>
+                    <div className="form-input-area">
+                      <div className="form-input-field">
+                        <Field
+                          type="text"
+                          inputMode="url"
+                          id="overseerrUrlBase"
+                          name="overseerrUrlBase"
+                          autoComplete="off"
+                          data-1pignore="true"
+                          data-lpignore="true"
+                          data-bwignore="true"
+                        />
+                      </div>
+                      {errors.overseerrUrlBase &&
+                        touched.overseerrUrlBase &&
+                        typeof errors.overseerrUrlBase === 'string' && (
+                          <div className="error">{errors.overseerrUrlBase}</div>
+                        )}
+                    </div>
+                  </div>
+                  <div className="form-row">
+                    <label htmlFor="overseerrApiKey" className="text-label">
+                      {intl.formatMessage(messages.overseerrApiKey)}
+                      <span className="label-required">*</span>
+                      <span className="label-tip">
+                        {intl.formatMessage(messages.overseerrApiKeyTip)}
+                      </span>
+                    </label>
+                    <div className="form-input-area">
+                      <div className="form-input-field">
+                        <SensitiveInput
+                          as="field"
+                          id="overseerrApiKey"
+                          name="overseerrApiKey"
+                          type="text"
+                          placeholder="Your Overseerr API Key"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                  <div className="form-row">
+                    <label htmlFor="overseerrExternalUrl" className="text-label">
+                      {intl.formatMessage(messages.overseerrExternalUrl)}
+                    </label>
+                    <div className="form-input-area">
+                      <div className="form-input-field">
+                        <Field
+                          type="text"
+                          inputMode="url"
+                          id="overseerrExternalUrl"
+                          name="overseerrExternalUrl"
+                          autoComplete="off"
+                          data-1pignore="true"
+                          data-lpignore="true"
+                          data-bwignore="true"
+                        />
+                      </div>
+                      {errors.overseerrExternalUrl &&
+                        touched.overseerrExternalUrl && (
+                          <div className="error">
+                            {errors.overseerrExternalUrl}
+                          </div>
+                        )}
+                    </div>
+                  </div>
+                  <div className="actions">
+                    <div className="flex justify-end">
+                      <span className="ml-3 inline-flex rounded-md shadow-sm">
+                        <Button
+                          buttonType="default"
+                          type="button"
+                          onClick={testConnection}
+                          disabled={!values.overseerrHostname || !values.overseerrPort || !values.overseerrApiKey}
+                        >
+                          {intl.formatMessage(messages.testOverseerrConnection)}
+                        </Button>
+                      </span>
+                      <span className="ml-3 inline-flex rounded-md shadow-sm">
+                        <Button
+                          buttonType="primary"
+                          type="submit"
+                          disabled={isSubmitting || !isValid}
+                        >
+                          {isSubmitting
+                            ? intl.formatMessage(globalMessages.saving)
+                            : intl.formatMessage(globalMessages.save)}
+                        </Button>
+                      </span>
+                    </div>
+                  </div>
+                </form>
+              );
+            }}
+          </Formik>
+
           <div className="mt-10 mb-6">
             <h3 className="heading">
               {intl.formatMessage(messages.tautulliSettings)}

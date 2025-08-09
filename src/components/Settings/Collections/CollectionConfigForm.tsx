@@ -4,7 +4,8 @@ import { Transition } from '@headlessui/react';
 import { ChevronDownIcon } from '@heroicons/react/24/solid';
 import { Field, Formik } from 'formik';
 import { defineMessages, useIntl } from 'react-intl';
-import { useState, useRef } from 'react';
+import React, { useState, useRef } from 'react';
+import Select from 'react-select';
 import useClickOutside from '@app/hooks/useClickOutside';
 import { useToasts } from 'react-toast-notifications';
 import useSWR from 'swr';
@@ -16,6 +17,11 @@ import type {
   TemplatePreset,
   SubtypeOption,
 } from './types';
+import CollectionTypeSection from './CollectionTypeSection';
+import TemplateSection from './TemplateSection';
+import VisibilitySection from './VisibilitySection';
+import LibrarySelectionSection from './LibrarySelectionSection';
+import CustomUrlSection from './CustomUrlSection';
 
 const messages = defineMessages({
   editCollection: 'Edit Collection Configuration',
@@ -36,133 +42,16 @@ const messages = defineMessages({
   alwaysActive: 'Always Active (no time restrictions)',
 });
 
-// Library Checkbox Dropdown Component
-interface LibraryCheckboxDropdownProps {
-  selectedLibraries: string[];
-  allLibraries: { id: string; name: string; type: string; enabled: boolean }[];
-  onSelectionChange: (selectedIds: string[]) => void;
-  disabled?: boolean;
-  error?: string;
-  showAllLibrariesOption?: boolean; // Control whether to show "All Libraries" option
-}
-
-const LibraryCheckboxDropdown = ({
-  selectedLibraries,
-  allLibraries,
-  onSelectionChange,
-  disabled = false,
-  error,
-  showAllLibrariesOption = true
-}: LibraryCheckboxDropdownProps) => {
-  const [isOpen, setIsOpen] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
-  useClickOutside(dropdownRef, () => setIsOpen(false));
-
-  const allLibrariesSelected = selectedLibraries.includes('all');
-  const enabledLibraries = allLibraries.filter(lib => lib.enabled);
-
-  const handleAllLibrariesChange = (checked: boolean) => {
-    if (checked) {
-      onSelectionChange(['all']);
-    } else {
-      onSelectionChange([]);
-    }
-  };
-
-  const handleLibraryChange = (libraryId: string, checked: boolean) => {
-    if (allLibrariesSelected) return; // Don't allow individual changes when "All Libraries" is selected
-
-    if (checked) {
-      onSelectionChange([...selectedLibraries.filter(id => id !== 'all'), libraryId]);
-    } else {
-      onSelectionChange(selectedLibraries.filter(id => id !== libraryId));
-    }
-  };
-
-  const getDisplayText = () => {
-    if (selectedLibraries.length === 0) {
-      return 'Select Libraries...';
-    }
-    if (allLibrariesSelected) {
-      return 'All Libraries';
-    }
-    if (selectedLibraries.length === 1) {
-      const library = enabledLibraries.find(lib => lib.id === selectedLibraries[0]);
-      return library ? library.name : '1 library selected';
-    }
-    return `${selectedLibraries.length} libraries selected`;
-  };
-
-  return (
-    <div className="relative" ref={dropdownRef}>
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={() => setIsOpen(!isOpen)}
-        className={`form-input flex w-full items-center justify-between text-left ${
-          disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
-        } ${error ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : ''}`}
-      >
-        <span className={selectedLibraries.length === 0 ? 'text-gray-400' : 'text-white'}>
-          {getDisplayText()}
-        </span>
-        <ChevronDownIcon className={`ml-2 h-4 w-4 text-gray-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
-      </button>
-
-      <Transition
-        show={isOpen}
-        enter="transition ease-out duration-100"
-        enterFrom="opacity-0 scale-95"
-        enterTo="opacity-100 scale-100"
-        leave="transition ease-in duration-75"
-        leaveFrom="opacity-100 scale-100"
-        leaveTo="opacity-0 scale-95"
-      >
-        <div className="absolute z-50 mt-1 w-full rounded-md border border-gray-600 bg-gray-700 shadow-lg ring-1 ring-black ring-opacity-5">
-          <div className="py-1">
-            {/* All Libraries Option - conditionally shown */}
-            {showAllLibrariesOption && (
-              <label className="flex items-center px-4 py-2 text-sm hover:bg-gray-600 cursor-pointer transition-colors">
-                <input
-                  type="checkbox"
-                  checked={allLibrariesSelected}
-                  onChange={(e) => handleAllLibrariesChange(e.target.checked)}
-                  className="form-checkbox mr-3"
-                />
-                <span className="text-white font-medium">All Libraries</span>
-              </label>
-            )}
-
-            {/* Individual Library Options */}
-            {enabledLibraries.map((library) => (
-              <label
-                key={library.id}
-                className={`flex items-center px-4 py-2 text-sm hover:bg-gray-600 cursor-pointer transition-colors ${
-                  allLibrariesSelected ? 'opacity-50' : ''
-                }`}
-              >
-                <input
-                  type="checkbox"
-                  checked={selectedLibraries.includes(library.id)}
-                  onChange={(e) => handleLibraryChange(library.id, e.target.checked)}
-                  disabled={allLibrariesSelected}
-                  className={`form-checkbox mr-3 ${allLibrariesSelected ? 'opacity-50' : ''}`}
-                />
-                <span className="text-white">{library.name}</span>
-              </label>
-            ))}
-          </div>
-        </div>
-      </Transition>
-    </div>
-  );
-};
 
 const CollectionConfigForm = ({
   config,
   onSave,
   onCancel,
+  onUnlink,
+  onLink,
   libraries,
+  allCollectionConfigs = [],
+  allHubConfigs = [],
 }: CollectionConfigFormProps) => {
   const intl = useIntl();
   const { addToast } = useToasts();
@@ -182,18 +71,57 @@ const CollectionConfigForm = ({
     imdb?: string;
     letterboxd?: string;
   }>({});
+
   const [detectedMediaTypes, setDetectedMediaTypes] = useState<{
     trakt?: 'movie' | 'tv' | 'both';
     tmdb?: 'movie' | 'tv' | 'both';
     imdb?: 'movie' | 'tv' | 'both';
     letterboxd?: 'movie' | 'tv' | 'both';
   }>({});
+
   const [fetchingTitle, setFetchingTitle] = useState<{
     trakt?: boolean;
     tmdb?: boolean;
     imdb?: boolean;
     letterboxd?: boolean;
   }>({});
+
+  // Safety check for undefined config
+  if (!config) {
+    console.error('CollectionConfigForm received undefined config');
+    return null;
+  }
+
+  // Determine if this config can be linked or unlinked using the same logic as the main page
+  const isLinkedHub = config.type === 'hub' && (config as any)._isLinkedHub;
+
+  // For collections, use the same simple logic as the main page
+  const isLinkedCollection = config.type !== 'hub' &&
+    allCollectionConfigs.filter(c => c.type === config.type && c.subtype === config.subtype).length > 1;
+
+  const isLinked = isLinkedHub || isLinkedCollection;
+
+  const canBeLinked = !isLinked && (
+    config.type === 'hub'
+      ? allHubConfigs.filter((h: any) => h.hubIdentifier === config.subtype).length > 1
+      : allCollectionConfigs.filter(c => c.type === config.type && c.subtype === config.subtype && c.id !== config.id).length > 0
+  );
+
+  // Button handlers for link/unlink
+  const handleUnlink = () => {
+    if (onUnlink) {
+      onUnlink(config);
+      onCancel(); // Close the form after unlinking
+    }
+  };
+
+  const handleLink = () => {
+    if (onLink) {
+      onLink(config);
+      onCancel(); // Close the form after linking
+    }
+  };
+
 
   // Title fetching functions
   const fetchTraktTitle = async (url: string, setFieldValue?: (field: string, value: any) => void) => {
@@ -381,87 +309,6 @@ const CollectionConfigForm = ({
   // Template presets will be handled within the Formik form
   // Auto-adjustments will be handled via onChange handlers
 
-  const collectionTypes = [
-    { value: 'overseerr', label: 'Overseerr Requests' },
-    { value: 'tautulli', label: 'Tautulli Statistics' },
-    { value: 'trakt', label: 'Trakt Lists' },
-    { value: 'letterboxd', label: 'Letterboxd Lists' },
-    { value: 'tmdb', label: 'TMDb Lists' },
-    { value: 'imdb', label: 'IMDb Lists' },
-    { value: 'plex', label: 'Plex Built-in Hubs' },
-  ];
-
-  const getSubtypeOptions = (type: string): SubtypeOption[] => {
-    switch (type) {
-      case 'overseerr':
-        return [
-          {
-            value: 'users',
-            label: 'Individual Users Requests (excl. server owner)',
-          },
-          { value: 'server_owner', label: 'Server Owner requests' },
-          { value: 'global', label: 'All Requests' },
-        ];
-      case 'tautulli':
-        return [
-          { value: 'most_popular_plays', label: 'Most Popular (Play Count)' },
-          {
-            value: 'most_popular_duration',
-            label: 'Most Popular (Watch Duration)',
-          },
-          { value: 'most_watched_plays', label: 'Most Watched (Play Count)' },
-          {
-            value: 'most_watched_duration',
-            label: 'Most Watched (Watch Duration)',
-          },
-        ];
-      case 'trakt':
-        return [
-          { value: 'trending_7_days', label: 'Trending Last 7 Days' },
-          { value: 'trending_30_days', label: 'Trending Last 30 Days' },
-          { value: 'popular_week', label: 'Popular This Week' },
-          { value: 'popular_month', label: 'Popular This Month' },
-          { value: 'most_watched_week', label: 'Most Watched This Week' },
-          { value: 'most_watched_month', label: 'Most Watched This Month' },
-          { value: 'custom', label: 'Custom List' },
-        ];
-      case 'tmdb':
-        return [
-          { value: 'trending_day', label: 'Trending Today' },
-          { value: 'trending_week', label: 'Trending This Week' },
-          { value: 'popular', label: 'Popular' },
-          { value: 'top_rated', label: 'Top Rated' },
-          { value: 'custom', label: 'Custom Collection' },
-        ];
-      case 'imdb':
-        return [
-          { value: 'top_250', label: 'Top 250' },
-          { value: 'popular', label: 'Popular' },
-          { value: 'most_popular', label: 'Most Popular' },
-          { value: 'custom', label: 'Custom List' },
-        ];
-      case 'letterboxd':
-        return [
-          { value: 'custom', label: 'Custom List' },
-        ];
-      case 'plex':
-        return [
-          { value: 'movie.recentlyadded', label: 'Recently Added Movies', description: 'Built-in Recently Added Movies hub' },
-          { value: 'movie.recentlyreleased', label: 'Recently Released Movies', description: 'Built-in Recently Released Movies hub' },
-          { value: 'movie.curated', label: 'Seasonal Movies', description: 'Built-in Seasonal Movies hub' },
-          { value: 'movie.topunwatched', label: 'Top Unwatched Movies', description: 'Built-in Top Unwatched Movies hub' },
-          { value: 'movie.recentlyviewed', label: 'Recently Watched Movies', description: 'Built-in Recently Watched Movies hub' },
-          { value: 'tv.recentlyadded', label: 'Recently Added TV', description: 'Built-in Recently Added TV Shows hub' },
-          { value: 'tv.recentlyaired', label: 'Recently Released Episodes', description: 'Built-in Recently Released Episodes hub' },
-          { value: 'tv.startwatching', label: 'Start Watching', description: 'Built-in Continue Watching TV Shows hub' },
-          { value: 'tv.rediscover', label: 'Rediscover', description: 'Built-in Rediscover TV Shows hub' },
-          { value: 'tv.toprated', label: 'Top Rated TV', description: 'Built-in Top Rated TV Shows hub' },
-          { value: 'tv.recentlyviewed', label: 'Recently Watched Episodes', description: 'Built-in Recently Watched Episodes hub' },
-        ];
-      default:
-        return [];
-    }
-  };
 
   const getTemplatePresets = (values?: CollectionConfig, fetchedTitles?: { trakt?: string; tmdb?: string; imdb?: string }, detectedMediaTypes?: { trakt?: 'movie' | 'tv' | 'both'; tmdb?: 'movie' | 'tv' | 'both'; imdb?: 'movie' | 'tv' | 'both' }): TemplatePreset[] => {
     if (!values?.subtype) return [{ label: 'Custom', value: 'custom' }];
@@ -935,11 +782,8 @@ const CollectionConfigForm = ({
 
     let preview = template || 'Collection';
 
-    // Backwards compatibility for removed variables
-    const subtypeLabel =
-      valuesRef.type ? getSubtypeOptions(valuesRef.type).find(
-        (opt) => opt.value === valuesRef.subtype
-      )?.label || valuesRef.subtype : valuesRef.subtype;
+    // Backwards compatibility for removed variables  
+    const subtypeLabel = valuesRef.subtype || '';
     const cleanSubtype = (subtypeLabel || '').split(' (')[0]; // Remove " (Play Count)" etc.
     preview = preview.replace(/{name}/g, cleanSubtype);
     preview = preview.replace(/{subtype}/g, cleanSubtype);
@@ -1048,7 +892,7 @@ const CollectionConfigForm = ({
             libraryTabOnly: config.visibilityConfig?.libraryTabOnly ?? false,
           },
           customPoster: config.customPoster || '',
-          timeRestriction: config.timeRestriction || { 
+          timeRestriction: config.timeRestriction || {
             alwaysActive: true,
             removeFromPlexWhenInactive: false,
             inactiveVisibilityConfig: {
@@ -1101,6 +945,14 @@ const CollectionConfigForm = ({
               }
               okDisabled={!isValid || isSubmitting}
               onOk={() => handleSubmit()}
+              // Add unlink button if the config is currently linked
+              onSecondary={isLinked && onUnlink ? handleUnlink : undefined}
+              secondaryText={isLinked ? 'Unlink' : undefined}
+              secondaryButtonType="warning"
+              // Add link button if the config can be linked
+              onTertiary={canBeLinked && onLink ? handleLink : undefined}
+              tertiaryText={canBeLinked ? 'Link' : undefined}
+              tertiaryButtonType="primary"
               title={
                 config.id
                   ? intl.formatMessage(messages.editCollection)
@@ -1160,7 +1012,7 @@ const CollectionConfigForm = ({
                     libraryTabOnly: { enabled: false, label: 'Library Tab Only' }
                   };
 
-                  // For User Requests (overseerr + users), check if Users Home is unlocked  
+                  // For User Requests (overseerr + users), check if Users Home is unlocked
                   if (values.type === 'overseerr' && values.subtype === 'users') {
                     const isUsersHomeUnlocked = data?.usersHomeUnlocked || false;
                     return {
@@ -1200,76 +1052,79 @@ const CollectionConfigForm = ({
                   };
                 };
 
+                // Check if this is an enhanced form for pre-existing collections or default hubs
+                const isPreExistingCollection = (config as any)?._isPreExistingCollection || false;
+                const isDefaultPlexHub = (config as any)?._isDefaultPlexHub || false;
+                const isUnmanagedHub = (config as any)?._isUnmanagedHub || false;
+                const isLinkedHub = (config as any)?._isLinkedHub || false;
+                const isEnhancedForm = isPreExistingCollection || isDefaultPlexHub || isUnmanagedHub;
+
                 return (
                   <div className="space-y-6">
-                    {/* Collection Type */}
-                    <div className="form-row">
-                      <label htmlFor="collectionType" className="text-label">
-                        Collection Type
-                        <span className="label-required">*</span>
-                      </label>
-                      <div className="form-input-area">
-                        <div className="form-input-field">
-                          <Field
-                            as="select"
-                            id="collectionType"
-                            name="type"
-                            value={values.type}
-                            onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
-                              handleChange(e);
-                              setFieldValue('subtype', '');
-                            }}
-                          >
-                            <option value="">Select Source...</option>
-                            {collectionTypes.map((type) => (
-                              <option key={type.value} value={type.value}>
-                                {type.label}
-                              </option>
-                            ))}
-                          </Field>
-                        </div>
-                        {errors.type && touched.type && (
-                          <div className="error">
-                            {errors.type}
-                          </div>
+                    {/* Collection/Hub Title - show for enhanced forms */}
+                    {isEnhancedForm && (
+                      <div className="text-center">
+                        <h2 className="text-xl font-semibold text-white">
+                          {values.name || 'Unnamed Collection'}
+                        </h2>
+                        <p className="text-sm text-gray-400 mt-1">
+                          {isLinkedHub && values.libraryIds && Array.isArray(values.libraryIds)
+                            ? `${values.libraryIds.length} Libraries • ${values.mediaType ? values.mediaType.charAt(0).toUpperCase() + values.mediaType.slice(1) : ''}`
+                            : `${values.libraryName ? `${values.libraryName} • ` : ''}${values.mediaType ? values.mediaType.charAt(0).toUpperCase() + values.mediaType.slice(1) : ''}`
+                          }
+                        </p>
+                        {isLinkedHub && (
+                          <p className="text-xs text-indigo-300 mt-1">
+                            🔗 Changes will apply to all linked libraries
+                          </p>
                         )}
                       </div>
-                    </div>
+                    )}
 
-                    {/* Collection Sub-Type */}
-                    {values.type && (
-                      <div className="form-row">
-                        <label htmlFor="collectionSubtype" className="text-label">
-                          {intl.formatMessage(messages.collectionSubtype)}
-                          <span className="label-required">*</span>
-                        </label>
-                        <div className="form-input-area">
-                          <div className="form-input-field">
-                            <Field
-                              as="select"
-                              id="collectionSubtype"
-                              name="subtype"
-                              value={values.subtype}
-                            >
-                              <option value="">{intl.formatMessage(messages.selectSubtype)}</option>
-                              {getSubtypeOptions(values.type).map((subtype) => (
-                                <option key={subtype.value} value={subtype.value}>
-                                  {subtype.label}
-                                </option>
-                              ))}
-                            </Field>
+                    {/* Enhanced Form Header - only show for special hub types */}
+                    {isEnhancedForm && (
+                      <div className="rounded-md border border-blue-500/20 bg-blue-500/10 p-4">
+                        <div className="flex">
+                          <svg
+                            className="mt-0.5 mr-3 h-5 w-5 flex-shrink-0 text-blue-400"
+                            fill="currentColor"
+                            viewBox="0 0 20 20"
+                          >
+                            <path
+                              fillRule="evenodd"
+                              d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z"
+                              clipRule="evenodd"
+                            />
+                          </svg>
+                          <div>
+                            <h4 className="mb-1 text-sm font-medium text-blue-300">
+                              {isPreExistingCollection ? 'Pre-existing Collection' :
+                                isDefaultPlexHub ? 'Default Plex Hub' :
+                                  'Unmanaged Collection'}
+                            </h4>
+                            <p className="text-sm text-blue-200">
+                              {isPreExistingCollection
+                                ? 'This is an existing collection detected in Plex. Limited configuration options are available to preserve existing content.'
+                                : isDefaultPlexHub
+                                  ? 'This is a built-in Plex hub. Limited configuration options are available - the content is managed by Plex.'
+                                  : 'This is an unmanaged collection. Limited configuration options are available.'}
+                            </p>
                           </div>
-                          {errors.subtype && touched.subtype && (
-                            <div className="error">
-                              {errors.subtype}
-                            </div>
-                          )}
                         </div>
                       </div>
                     )}
 
-                    {/* Privacy Warnings for Overseerr Users Collections */}
-                    {values.type === 'overseerr' && values.subtype === 'users' && (
+                    {/* Collection Type and Sub-Type Section */}
+                    <CollectionTypeSection
+                      values={values}
+                      setFieldValue={setFieldValue}
+                      errors={errors}
+                      touched={touched}
+                      isVisible={!isEnhancedForm}
+                    />
+
+                    {/* Privacy Warnings for Overseerr Users Collections - only show for regular collections */}
+                    {!isEnhancedForm && values.type === 'overseerr' && values.subtype === 'users' && (
                       <div className="space-y-3">
                         {/* General visibility warning */}
                         <div className="rounded-md border border-blue-500/20 bg-blue-500/10 p-4">
@@ -1332,8 +1187,8 @@ const CollectionConfigForm = ({
                       </div>
                     )}
 
-                    {/* Custom Trakt List URL (for Trakt custom list collections) */}
-                    {values.type === 'trakt' && values.subtype === 'custom' && (
+                    {/* Custom Trakt List URL (for Trakt custom list collections) - only show for regular collections */}
+                    {!isEnhancedForm && values.type === 'trakt' && values.subtype === 'custom' && (
                       <div className="form-row">
                         <label htmlFor="traktCustomListUrl" className="text-label">
                           Trakt List URL
@@ -1374,8 +1229,8 @@ const CollectionConfigForm = ({
                       </div>
                     )}
 
-                    {/* Custom TMDb Collection URL (for TMDb custom collections) */}
-                    {values.type === 'tmdb' && values.subtype === 'custom' && (
+                    {/* Custom TMDb Collection URL (for TMDb custom collections) - only show for regular collections */}
+                    {!isEnhancedForm && values.type === 'tmdb' && values.subtype === 'custom' && (
                       <div className="form-row">
                         <label htmlFor="tmdbCustomListUrl" className="text-label">
                           TMDb Collection URL
@@ -1416,8 +1271,8 @@ const CollectionConfigForm = ({
                       </div>
                     )}
 
-                    {/* Custom IMDb List URL (for IMDb custom collections) */}
-                    {values.type === 'imdb' && values.subtype === 'custom' && (
+                    {/* Custom IMDb List URL (for IMDb custom collections) - only show for regular collections */}
+                    {!isEnhancedForm && values.type === 'imdb' && values.subtype === 'custom' && (
                       <div className="form-row">
                         <label htmlFor="imdbCustomListUrl" className="text-label">
                           IMDb List URL
@@ -1502,8 +1357,8 @@ const CollectionConfigForm = ({
                     )}
 
 
-                    {/* Library Selection - visible when type/subtype selected AND (not custom OR title fetched OR editing existing config) */}
-                    {values.type && values.subtype && (
+                    {/* Library Selection - visible when type/subtype selected AND (not custom OR title fetched OR editing existing config) - only show for regular collections */}
+                    {!isEnhancedForm && values.type && values.subtype && (
                       // For custom types, show after title is fetched OR when editing existing config with a name
                       (values.subtype !== 'custom') ||
                       (values.type === 'trakt' && values.subtype === 'custom' && (fetchedTitles.trakt || config?.name)) ||
@@ -1517,98 +1372,511 @@ const CollectionConfigForm = ({
                           </label>
                           <div className="form-input-area">
                             <div className="form-input-field">
-                              <LibraryCheckboxDropdown
-                                selectedLibraries={(() => {
-                                  // Convert current libraryId/libraryIds to selectedLibraries array for the dropdown
-                                  if (values.libraryIds && Array.isArray(values.libraryIds)) {
-                                    return values.libraryIds;
-                                  }
-                                  if (values.libraryId) {
-                                    return Array.isArray(values.libraryId) ? values.libraryId : [values.libraryId];
-                                  }
-                                  return [];
-                                })()}
-                                allLibraries={getFilteredLibraries()}
-                                showAllLibrariesOption={!getDetectedMediaType() || getDetectedMediaType() === 'both'}
-                                onSelectionChange={(selectedIds: string[]) => {
-                                  // Handle multiple library selection changes
-                                  setFieldValue('libraryIds', selectedIds);
-                                  
-                                  const detectedType = (() => {
-                                    if (values.type === 'trakt' && values.subtype === 'custom' && detectedMediaTypes.trakt) {
-                                      return detectedMediaTypes.trakt;
-                                    }
-                                    if (values.type === 'tmdb' && values.subtype === 'custom' && detectedMediaTypes.tmdb) {
-                                      return detectedMediaTypes.tmdb;
-                                    }
-                                    if (values.type === 'imdb' && values.subtype === 'custom' && detectedMediaTypes.imdb) {
-                                      return detectedMediaTypes.imdb;
-                                    }
-                                    return null;
-                                  })();
-                                  
-                                  if (selectedIds.includes('all')) {
-                                    // All libraries selected
-                                    setFieldValue('libraryName', 'All Libraries');
-                                    setFieldValue('libraryNames', ['All Libraries']);
-                                    setFieldValue('mediaType', detectedType || 'both');
-                                  } else if (selectedIds.length === 1) {
-                                    // Single library selected
-                                    const selectedLibrary = libraries.find((lib) => lib.id === selectedIds[0]);
-                                    setFieldValue('libraryName', selectedLibrary?.name || '');
-                                    setFieldValue('libraryNames', selectedLibrary ? [selectedLibrary.name] : []);
-                                    
-                                    if (detectedType && detectedType !== 'both') {
-                                      setFieldValue('mediaType', detectedType);
-                                    } else if (selectedLibrary) {
-                                      if (selectedLibrary.type === 'movie') {
-                                        setFieldValue('mediaType', 'movie');
-                                      } else if (selectedLibrary.type === 'show') {
-                                        setFieldValue('mediaType', 'tv');
-                                      } else {
-                                        setFieldValue('mediaType', 'both');
-                                      }
-                                    } else {
-                                      setFieldValue('mediaType', 'both');
-                                    }
-                                  } else if (selectedIds.length > 1) {
-                                    // Multiple libraries selected
-                                    const selectedLibraries = libraries.filter(lib => selectedIds.includes(lib.id));
-                                    const libraryNames = selectedLibraries.map(lib => lib.name);
-                                    setFieldValue('libraryName', `${selectedIds.length} libraries selected`);
-                                    setFieldValue('libraryNames', libraryNames);
-                                    setFieldValue('mediaType', detectedType || 'both');
-                                  } else {
-                                    // No libraries selected
-                                    setFieldValue('libraryName', '');
-                                    setFieldValue('libraryNames', []);
-                                  }
-                                  
-                                  // Auto-select first template
-                                  if (!values.template) {
-                                    const templatePresets = getTemplatePresets(values, fetchedTitles, detectedMediaTypes);
-                                    if (templatePresets.length > 0 && templatePresets[0].value &&
-                                      templatePresets[0].value !== 'custom' && templatePresets[0].value !== 'fetch-title') {
-                                      setFieldValue('template', templatePresets[0].value);
-                                    }
-                                  }
-                                }}
-                                error={errors.libraryId && touched.libraryId ? errors.libraryId : ''}
-                              />
+                              <div>Library Selection (Temporarily Disabled - TODO: Use LibrarySelectionSection)</div>
                             </div>
-                            {errors.libraryId && touched.libraryId && (
-                              <div className="error">
-                                {errors.libraryId}
-                              </div>
-                            )}
                           </div>
                         </div>
                       )}
 
-                    {/* Form unlocks when required fields are selected */}
-                    {values.type &&
+                    {/* Enhanced Form - show limited sections for special hub types */}
+                    {isEnhancedForm && (
+                      <div className="space-y-6">
+                        {/* Libraries (read-only for enhanced form) */}
+                        <div className="form-row">
+                          <label htmlFor="enhancedLibrary" className="text-label">
+                            Libraries
+                          </label>
+                          <div className="form-input-area">
+                            <div className="form-input-field">
+                              <input
+                                type="text"
+                                id="enhancedLibrary"
+                                value={
+                                  isLinkedHub && values.libraryNames && Array.isArray(values.libraryNames)
+                                    ? values.libraryNames.join(', ')
+                                    : values.libraryName || 'No library specified'
+                                }
+                                disabled
+                                className="opacity-75 cursor-not-allowed"
+                              />
+                            </div>
+                            <div className="label-tip">
+                              {isLinkedHub
+                                ? 'This hub appears across multiple libraries. Changes will apply to all of them.'
+                                : 'Library assignment cannot be changed for this item type.'}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Visibility Settings */}
+                        <div className="form-row">
+                          <div className="text-label">
+                            Visibility
+                          </div>
+                          <div className="form-input-area">
+                            <div className="form-input-field">
+                              <div className="space-y-2">
+                                {(() => {
+                                  const checkboxStates = getVisibilityCheckboxStates();
+                                  return (
+                                    <>
+                                      <div className="flex items-center">
+                                        <Field
+                                          type="checkbox"
+                                          id="enhancedVisibilityUsersHome"
+                                          name="visibilityConfig.usersHome"
+                                          disabled={!checkboxStates.usersHome.enabled || values.visibilityConfig?.libraryTabOnly}
+                                          className={`form-checkbox ${!checkboxStates.usersHome.enabled || values.visibilityConfig?.libraryTabOnly ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                        />
+                                        <label
+                                          htmlFor="enhancedVisibilityUsersHome"
+                                          className={`ml-2 text-sm ${!checkboxStates.usersHome.enabled || values.visibilityConfig?.libraryTabOnly ? 'text-gray-500' : ''}`}
+                                        >
+                                          {checkboxStates.usersHome.label}
+                                        </label>
+                                      </div>
+                                      <div className="flex items-center">
+                                        <Field
+                                          type="checkbox"
+                                          id="enhancedVisibilityServerOwnerHome"
+                                          name="visibilityConfig.serverOwnerHome"
+                                          disabled={!checkboxStates.serverOwnerHome.enabled || values.visibilityConfig?.libraryTabOnly}
+                                          className={`form-checkbox ${!checkboxStates.serverOwnerHome.enabled || values.visibilityConfig?.libraryTabOnly ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                        />
+                                        <label
+                                          htmlFor="enhancedVisibilityServerOwnerHome"
+                                          className={`ml-2 text-sm ${!checkboxStates.serverOwnerHome.enabled || values.visibilityConfig?.libraryTabOnly ? 'text-gray-500' : ''}`}
+                                        >
+                                          {checkboxStates.serverOwnerHome.label}
+                                        </label>
+                                      </div>
+                                      <div className="flex items-center">
+                                        <Field
+                                          type="checkbox"
+                                          id="enhancedVisibilityLibraryRecommended"
+                                          name="visibilityConfig.libraryRecommended"
+                                          disabled={!checkboxStates.libraryRecommended.enabled || values.visibilityConfig?.libraryTabOnly}
+                                          className={`form-checkbox ${!checkboxStates.libraryRecommended.enabled || values.visibilityConfig?.libraryTabOnly ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                        />
+                                        <label
+                                          htmlFor="enhancedVisibilityLibraryRecommended"
+                                          className={`ml-2 text-sm ${!checkboxStates.libraryRecommended.enabled || values.visibilityConfig?.libraryTabOnly ? 'text-gray-500' : ''}`}
+                                        >
+                                          {checkboxStates.libraryRecommended.label}
+                                        </label>
+                                      </div>
+                                      {/* Library Tab Only - not available for default Plex hubs */}
+                                      {!isDefaultPlexHub && (
+                                        <div className="flex items-center">
+                                          <Field
+                                            type="checkbox"
+                                            id="enhancedVisibilityLibraryTabOnly"
+                                            name="visibilityConfig.libraryTabOnly"
+                                            disabled={!checkboxStates.libraryTabOnly.enabled}
+                                            onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                                              setFieldValue('visibilityConfig.libraryTabOnly', e.target.checked);
+                                              // When Library Tab Only is checked, uncheck all other options
+                                              if (e.target.checked) {
+                                                setFieldValue('visibilityConfig.usersHome', false);
+                                                setFieldValue('visibilityConfig.serverOwnerHome', false);
+                                                setFieldValue('visibilityConfig.libraryRecommended', false);
+                                              }
+                                            }}
+                                            className={`form-checkbox ${!checkboxStates.libraryTabOnly.enabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                          />
+                                          <label
+                                            htmlFor="enhancedVisibilityLibraryTabOnly"
+                                            className={`ml-2 text-sm ${!checkboxStates.libraryTabOnly.enabled ? 'text-gray-500' : ''}`}
+                                          >
+                                            {checkboxStates.libraryTabOnly.label}
+                                          </label>
+                                        </div>
+                                      )}
+                                    </>
+                                  );
+                                })()}
+                              </div>
+                            </div>
+                            <div className="label-tip">
+                              {values.visibilityConfig?.libraryTabOnly
+                                ? 'Collection will only appear in Library tab'
+                                : 'Choose where the collection should appear'}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Custom Poster - hide for default Plex hubs */}
+                        {!isDefaultPlexHub && (
+                          <div className="form-row">
+                            <label htmlFor="enhancedCustomPoster" className="text-label">Custom Poster</label>
+                            <div className="form-input-area">
+                              <div className="form-input-field">
+                                <input
+                                  type="file"
+                                  id="enhancedCustomPoster"
+                                  accept="image/jpeg,image/png,image/webp"
+                                  disabled={posterUploading}
+                                  onChange={async (e) => {
+                                    const file = e.target.files?.[0];
+                                    if (file) {
+                                      // Validate file size on client side
+                                      if (file.size > 10 * 1024 * 1024) {
+                                        addToast('File size must be less than 10MB', { appearance: 'error' });
+                                        e.target.value = ''; // Reset file input
+                                        return;
+                                      }
+
+                                      // Validate file type
+                                      const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
+                                      if (!allowedTypes.includes(file.type)) {
+                                        addToast('Only JPEG, PNG, and WebP images are allowed', { appearance: 'error' });
+                                        e.target.value = ''; // Reset file input
+                                        return;
+                                      }
+
+                                      setPosterUploading(true);
+                                      try {
+                                        const formData = new FormData();
+                                        formData.append('poster', file);
+
+                                        const response = await fetch('/api/v1/settings/collections/poster/upload', {
+                                          method: 'POST',
+                                          body: formData,
+                                        });
+
+                                        if (response.ok) {
+                                          const result = await response.json();
+                                          setFieldValue('customPoster', result.filename);
+                                          addToast('Poster uploaded successfully. Will be applied on next collection sync.', { appearance: 'success' });
+                                        } else {
+                                          const error = await response.json();
+                                          addToast(`Upload failed: ${error.error}`, { appearance: 'error' });
+                                          e.target.value = ''; // Reset file input on error
+                                        }
+                                      } catch (error) {
+                                        const message = error instanceof Error ? error.message : 'Network error occurred';
+                                        addToast(`Upload failed: ${message}`, { appearance: 'error' });
+                                        e.target.value = ''; // Reset file input on error
+                                      } finally {
+                                        setPosterUploading(false);
+                                      }
+                                    }
+                                  }}
+                                  className={posterUploading ? 'opacity-50 cursor-not-allowed' : ''}
+                                />
+                              </div>
+                              {posterUploading && (
+                                <div className="mt-2 text-sm text-blue-400">
+                                  Uploading poster...
+                                </div>
+                              )}
+                              {values.customPoster && !posterUploading && (
+                                <div className="mt-2 flex items-center space-x-2">
+                                  <img
+                                    src={`/api/v1/settings/collections/poster/${values.customPoster}`}
+                                    alt="Custom poster preview"
+                                    className="h-20 w-14 object-cover rounded shadow-sm border"
+                                    onError={(e) => {
+                                      // Handle broken image URLs
+                                      const target = e.target as HTMLImageElement;
+                                      target.src = '/images/overseerr_poster_not_found.png';
+                                    }}
+                                  />
+                                  <div className="flex flex-col space-y-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setFieldValue('customPoster', '');
+                                        addToast('Poster will be removed on next collection sync', { appearance: 'info' });
+                                      }}
+                                      className="text-red-600 hover:text-red-800 text-sm px-2 py-1 border border-red-300 rounded hover:bg-red-50 transition-colors"
+                                    >
+                                      Remove
+                                    </button>
+                                    <span className="text-xs text-gray-500">500x750px</span>
+                                  </div>
+                                </div>
+                              )}
+                              <div className="label-tip">
+                                Upload a custom poster image for this collection (JPEG, PNG, or WebP, max 10MB). Poster will be applied to Plex during the next collection sync.
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Time Restrictions (without remove from Plex option) */}
+                        <div className="form-row">
+                          <label htmlFor="enhancedTimeRestrictions" className="text-label">Time Restrictions</label>
+                          <div className="form-input-area">
+                            <div className="form-input-field">
+                              <label className="inline-flex items-center">
+                                <input
+                                  id="enhancedTimeRestrictions"
+                                  type="checkbox"
+                                  checked={values.timeRestriction?.alwaysActive ?? true}
+                                  onChange={(e) => {
+                                    setFieldValue('timeRestriction', {
+                                      ...values.timeRestriction,
+                                      alwaysActive: e.target.checked,
+                                      removeFromPlexWhenInactive: false, // Not available in enhanced form
+                                    });
+                                  }}
+                                  className="form-checkbox"
+                                />
+                                <span className="ml-2 text-sm text-gray-300">
+                                  Always Active (no time restrictions)
+                                </span>
+                              </label>
+                            </div>
+
+                            {/* Time restriction details - only show when not always active */}
+                            {!values.timeRestriction?.alwaysActive && (
+                              <>
+                                {/* Inactive Visibility Settings - always show for enhanced form (no remove from Plex) */}
+                                <div className="mt-4 p-4 bg-gray-800 rounded-md">
+                                  <div className="text-sm font-medium text-gray-300 mb-3">
+                                    Visibility When Inactive
+                                  </div>
+                                  <div className="space-y-2">
+                                    {(() => {
+                                      const checkboxStates = getVisibilityCheckboxStates();
+                                      return (
+                                        <>
+                                          <div className="flex items-center">
+                                            <input
+                                              type="checkbox"
+                                              id="enhancedInactiveVisibilityUsersHome"
+                                              checked={values.timeRestriction?.inactiveVisibilityConfig?.usersHome ?? false}
+                                              disabled={!checkboxStates.usersHome.enabled || values.timeRestriction?.inactiveVisibilityConfig?.libraryTabOnly}
+                                              onChange={(e) => {
+                                                setFieldValue('timeRestriction.inactiveVisibilityConfig.usersHome', e.target.checked);
+                                              }}
+                                              className={`form-checkbox ${!checkboxStates.usersHome.enabled || values.timeRestriction?.inactiveVisibilityConfig?.libraryTabOnly ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                            />
+                                            <label
+                                              htmlFor="enhancedInactiveVisibilityUsersHome"
+                                              className={`ml-2 text-sm ${!checkboxStates.usersHome.enabled || values.timeRestriction?.inactiveVisibilityConfig?.libraryTabOnly ? 'text-gray-500' : 'text-gray-300'}`}
+                                            >
+                                              Users Home
+                                            </label>
+                                          </div>
+                                          <div className="flex items-center">
+                                            <input
+                                              type="checkbox"
+                                              id="enhancedInactiveVisibilityServerOwnerHome"
+                                              checked={values.timeRestriction?.inactiveVisibilityConfig?.serverOwnerHome ?? false}
+                                              disabled={!checkboxStates.serverOwnerHome.enabled || values.timeRestriction?.inactiveVisibilityConfig?.libraryTabOnly}
+                                              onChange={(e) => {
+                                                setFieldValue('timeRestriction.inactiveVisibilityConfig.serverOwnerHome', e.target.checked);
+                                              }}
+                                              className={`form-checkbox ${!checkboxStates.serverOwnerHome.enabled || values.timeRestriction?.inactiveVisibilityConfig?.libraryTabOnly ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                            />
+                                            <label
+                                              htmlFor="enhancedInactiveVisibilityServerOwnerHome"
+                                              className={`ml-2 text-sm ${!checkboxStates.serverOwnerHome.enabled || values.timeRestriction?.inactiveVisibilityConfig?.libraryTabOnly ? 'text-gray-500' : 'text-gray-300'}`}
+                                            >
+                                              Server Owner Home
+                                            </label>
+                                          </div>
+                                          <div className="flex items-center">
+                                            <input
+                                              type="checkbox"
+                                              id="enhancedInactiveVisibilityLibraryRecommended"
+                                              checked={values.timeRestriction?.inactiveVisibilityConfig?.libraryRecommended ?? false}
+                                              disabled={!checkboxStates.libraryRecommended.enabled || values.timeRestriction?.inactiveVisibilityConfig?.libraryTabOnly}
+                                              onChange={(e) => {
+                                                setFieldValue('timeRestriction.inactiveVisibilityConfig.libraryRecommended', e.target.checked);
+                                              }}
+                                              className={`form-checkbox ${!checkboxStates.libraryRecommended.enabled || values.timeRestriction?.inactiveVisibilityConfig?.libraryTabOnly ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                            />
+                                            <label
+                                              htmlFor="enhancedInactiveVisibilityLibraryRecommended"
+                                              className={`ml-2 text-sm ${!checkboxStates.libraryRecommended.enabled || values.timeRestriction?.inactiveVisibilityConfig?.libraryTabOnly ? 'text-gray-500' : 'text-gray-300'}`}
+                                            >
+                                              Library Recommended
+                                            </label>
+                                          </div>
+                                          {/* Library Tab Only - not available for default Plex hubs */}
+                                          {!isDefaultPlexHub && (
+                                            <div className="flex items-center">
+                                              <input
+                                                type="checkbox"
+                                                id="enhancedInactiveVisibilityLibraryTabOnly"
+                                                checked={values.timeRestriction?.inactiveVisibilityConfig?.libraryTabOnly ?? false}
+                                                disabled={!checkboxStates.libraryTabOnly.enabled}
+                                                onChange={(e) => {
+                                                  setFieldValue('timeRestriction.inactiveVisibilityConfig.libraryTabOnly', e.target.checked);
+                                                  // When Library Tab Only is checked, uncheck all other options
+                                                  if (e.target.checked) {
+                                                    setFieldValue('timeRestriction.inactiveVisibilityConfig.usersHome', false);
+                                                    setFieldValue('timeRestriction.inactiveVisibilityConfig.serverOwnerHome', false);
+                                                    setFieldValue('timeRestriction.inactiveVisibilityConfig.libraryRecommended', false);
+                                                  }
+                                                }}
+                                                className={`form-checkbox ${!checkboxStates.libraryTabOnly.enabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                              />
+                                              <label
+                                                htmlFor="enhancedInactiveVisibilityLibraryTabOnly"
+                                                className={`ml-2 text-sm ${!checkboxStates.libraryTabOnly.enabled ? 'text-gray-500' : 'text-gray-300'}`}
+                                              >
+                                                Library Tab Only
+                                              </label>
+                                            </div>
+                                          )}
+                                        </>
+                                      );
+                                    })()}
+                                  </div>
+                                  <div className="label-tip text-gray-400 mt-2">
+                                    {values.timeRestriction?.inactiveVisibilityConfig?.libraryTabOnly
+                                      ? 'Collection will only appear in Library tab when inactive'
+                                      : 'Choose where the collection should appear when inactive'
+                                    }
+                                  </div>
+                                </div>
+
+                                {/* Time restriction options */}
+                                <div className="mt-4 space-y-4">
+                                  {/* Date Ranges */}
+                                  <div>
+                                    <div className="block text-sm font-medium text-gray-300 mb-2">
+                                      Date Ranges for Collection to be active
+                                    </div>
+
+                                    {values.timeRestriction?.dateRanges?.map((range, index) => (
+                                      <div key={index} className="flex items-center space-x-2 mb-2">
+                                        <input
+                                          type="text"
+                                          placeholder="DD-MM"
+                                          value={range.startDate}
+                                          onChange={(e) => {
+                                            const newRanges = [...(values.timeRestriction?.dateRanges || [])];
+                                            newRanges[index] = { ...range, startDate: e.target.value };
+                                            setFieldValue('timeRestriction', {
+                                              ...values.timeRestriction,
+                                              alwaysActive: false,
+                                              removeFromPlexWhenInactive: false,
+                                              dateRanges: newRanges,
+                                            });
+                                          }}
+                                          className="w-20 text-sm"
+                                          maxLength={5}
+                                        />
+                                        <span className="text-gray-400">to</span>
+                                        <input
+                                          type="text"
+                                          placeholder="DD-MM"
+                                          value={range.endDate}
+                                          onChange={(e) => {
+                                            const newRanges = [...(values.timeRestriction?.dateRanges || [])];
+                                            newRanges[index] = { ...range, endDate: e.target.value };
+                                            setFieldValue('timeRestriction', {
+                                              ...values.timeRestriction,
+                                              alwaysActive: false,
+                                              removeFromPlexWhenInactive: false,
+                                              dateRanges: newRanges,
+                                            });
+                                          }}
+                                          className="w-20 text-sm"
+                                          maxLength={5}
+                                        />
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            const newRanges = values.timeRestriction?.dateRanges?.filter((_, i) => i !== index) || [];
+                                            setFieldValue('timeRestriction', {
+                                              ...values.timeRestriction,
+                                              alwaysActive: false,
+                                              removeFromPlexWhenInactive: false,
+                                              dateRanges: newRanges,
+                                            });
+                                          }}
+                                          className="text-red-400 hover:text-red-300"
+                                        >
+                                          Remove
+                                        </button>
+                                      </div>
+                                    ))}
+
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const currentRanges = values.timeRestriction?.dateRanges || [];
+                                        setFieldValue('timeRestriction', {
+                                          ...values.timeRestriction,
+                                          alwaysActive: false,
+                                          removeFromPlexWhenInactive: false,
+                                          dateRanges: [...currentRanges, { startDate: '', endDate: '' }],
+                                        });
+                                      }}
+                                      className="text-indigo-400 hover:text-indigo-300 text-sm"
+                                    >
+                                      + Add Date Range
+                                    </button>
+                                  </div>
+
+                                  {/* Weekly Schedule */}
+                                  <div>
+                                    <div className="block text-sm font-medium text-gray-300 mb-2">
+                                      Weekly Schedule (collection active on selected days)
+                                    </div>
+                                    <div className="grid grid-cols-7 gap-1">
+                                      {[
+                                        { key: 'monday', label: 'Mon' },
+                                        { key: 'tuesday', label: 'Tue' },
+                                        { key: 'wednesday', label: 'Wed' },
+                                        { key: 'thursday', label: 'Thu' },
+                                        { key: 'friday', label: 'Fri' },
+                                        { key: 'saturday', label: 'Sat' },
+                                        { key: 'sunday', label: 'Sun' },
+                                      ].map((day) => (
+                                        <label key={day.key} className="flex items-center justify-center p-2 text-center">
+                                          <input
+                                            type="checkbox"
+                                            checked={values.timeRestriction?.weeklySchedule?.[day.key as keyof typeof values.timeRestriction.weeklySchedule] ?? false}
+                                            onChange={(e) => {
+                                              const currentSchedule = values.timeRestriction?.weeklySchedule || {
+                                                monday: false,
+                                                tuesday: false,
+                                                wednesday: false,
+                                                thursday: false,
+                                                friday: false,
+                                                saturday: false,
+                                                sunday: false,
+                                              };
+                                              setFieldValue('timeRestriction', {
+                                                ...values.timeRestriction,
+                                                alwaysActive: false,
+                                                removeFromPlexWhenInactive: false,
+                                                weeklySchedule: {
+                                                  ...currentSchedule,
+                                                  [day.key]: e.target.checked,
+                                                },
+                                              });
+                                            }}
+                                            className="form-checkbox"
+                                          />
+                                          <span className="ml-1 text-sm text-gray-300">{day.label}</span>
+                                        </label>
+                                      ))}
+                                    </div>
+                                  </div>
+                                </div>
+                              </>
+                            )}
+
+                            <div className="label-tip">
+                              Configure when this collection should be active. When inactive, the collection visibility will change according to the settings above.
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Regular Form - show full form for normal collections */}
+                    {!isEnhancedForm && values.type &&
                       values.subtype &&
-                      values.libraryId &&
+                      (values.libraryIds?.length > 0 || values.libraryId) &&
                       (values.type !== 'tautulli' || values.customDays) &&
                       (values.type !== 'trakt' ||
                         values.subtype !== 'custom' ||
@@ -1773,7 +2041,7 @@ const CollectionConfigForm = ({
                                     const specificLibraryIds = selectedLibraryIds.filter(id => id !== 'all');
                                     const hasMultipleSpecificLibraries = specificLibraryIds.length > 1;
                                     const hasSingleSpecificLibrary = specificLibraryIds.length === 1;
-                                    
+
                                     if (hasAllLibraries) {
                                       return (
                                         // Show preview for each library when "All Libraries" is selected
@@ -1816,7 +2084,7 @@ const CollectionConfigForm = ({
                                             .map((libraryId) => {
                                               const library = libraries.find(lib => lib.id === libraryId);
                                               if (!library) return null;
-                                              
+
                                               const libraryMediaType = library.type === 'show' ? 'tv' : 'movie';
                                               const templateToUse = (() => {
                                                 if (values.template === 'custom') {
@@ -1850,7 +2118,7 @@ const CollectionConfigForm = ({
                                           const libraryId = specificLibraryIds[0];
                                           const library = libraries.find(lib => lib.id === libraryId);
                                           if (!library) return 'No library found';
-                                          
+
                                           const libraryMediaType = library.type === 'show' ? 'tv' : 'movie';
                                           const templateToUse = (() => {
                                             if (values.template === 'custom') {
@@ -1978,8 +2246,8 @@ const CollectionConfigForm = ({
                                           disabled={!checkboxStates.usersHome.enabled || values.visibilityConfig?.libraryTabOnly}
                                           className={`form-checkbox ${!checkboxStates.usersHome.enabled || values.visibilityConfig?.libraryTabOnly ? 'opacity-50 cursor-not-allowed' : ''}`}
                                         />
-                                        <label 
-                                          htmlFor="visibilityUsersHome" 
+                                        <label
+                                          htmlFor="visibilityUsersHome"
                                           className={`ml-2 text-sm ${!checkboxStates.usersHome.enabled || values.visibilityConfig?.libraryTabOnly ? 'text-gray-500' : ''}`}
                                         >
                                           {checkboxStates.usersHome.label}
@@ -1993,8 +2261,8 @@ const CollectionConfigForm = ({
                                           disabled={!checkboxStates.serverOwnerHome.enabled || values.visibilityConfig?.libraryTabOnly}
                                           className={`form-checkbox ${!checkboxStates.serverOwnerHome.enabled || values.visibilityConfig?.libraryTabOnly ? 'opacity-50 cursor-not-allowed' : ''}`}
                                         />
-                                        <label 
-                                          htmlFor="visibilityServerOwnerHome" 
+                                        <label
+                                          htmlFor="visibilityServerOwnerHome"
                                           className={`ml-2 text-sm ${!checkboxStates.serverOwnerHome.enabled || values.visibilityConfig?.libraryTabOnly ? 'text-gray-500' : ''}`}
                                         >
                                           {checkboxStates.serverOwnerHome.label}
@@ -2008,8 +2276,8 @@ const CollectionConfigForm = ({
                                           disabled={!checkboxStates.libraryRecommended.enabled || values.visibilityConfig?.libraryTabOnly}
                                           className={`form-checkbox ${!checkboxStates.libraryRecommended.enabled || values.visibilityConfig?.libraryTabOnly ? 'opacity-50 cursor-not-allowed' : ''}`}
                                         />
-                                        <label 
-                                          htmlFor="visibilityLibraryRecommended" 
+                                        <label
+                                          htmlFor="visibilityLibraryRecommended"
                                           className={`ml-2 text-sm ${!checkboxStates.libraryRecommended.enabled || values.visibilityConfig?.libraryTabOnly ? 'text-gray-500' : ''}`}
                                         >
                                           {checkboxStates.libraryRecommended.label}
@@ -2032,8 +2300,8 @@ const CollectionConfigForm = ({
                                             }
                                           }}
                                         />
-                                        <label 
-                                          htmlFor="visibilityLibraryTabOnly" 
+                                        <label
+                                          htmlFor="visibilityLibraryTabOnly"
                                           className={`ml-2 text-sm ${!checkboxStates.libraryTabOnly.enabled ? 'text-gray-500' : ''}`}
                                         >
                                           {checkboxStates.libraryTabOnly.label}
@@ -2043,7 +2311,7 @@ const CollectionConfigForm = ({
                                   );
                                 })()}
                                 <div className="text-xs text-gray-400 mt-2">
-                                  {values.visibilityConfig?.libraryTabOnly 
+                                  {values.visibilityConfig?.libraryTabOnly
                                     ? 'Collection will only appear in Library tab (overrides other options)'
                                     : 'If no visibility options are selected, collection will only appear in Library tab'
                                   }
@@ -2097,7 +2365,7 @@ const CollectionConfigForm = ({
                                         e.target.value = ''; // Reset file input
                                         return;
                                       }
-                                      
+
                                       // Validate file type
                                       const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
                                       if (!allowedTypes.includes(file.type)) {
@@ -2105,17 +2373,17 @@ const CollectionConfigForm = ({
                                         e.target.value = ''; // Reset file input
                                         return;
                                       }
-                                      
+
                                       setPosterUploading(true);
                                       try {
                                         const formData = new FormData();
                                         formData.append('poster', file);
-                                        
+
                                         const response = await fetch('/api/v1/settings/collections/poster', {
                                           method: 'POST',
                                           body: formData,
                                         });
-                                        
+
                                         if (response.ok) {
                                           const result = await response.json();
                                           setFieldValue('customPoster', result.filename);
@@ -2245,8 +2513,8 @@ const CollectionConfigForm = ({
                                               }}
                                               className={`form-checkbox ${!checkboxStates.usersHome.enabled || values.timeRestriction?.inactiveVisibilityConfig?.libraryTabOnly ? 'opacity-50 cursor-not-allowed' : ''}`}
                                             />
-                                            <label 
-                                              htmlFor="inactiveVisibilityUsersHome" 
+                                            <label
+                                              htmlFor="inactiveVisibilityUsersHome"
                                               className={`ml-2 text-sm ${!checkboxStates.usersHome.enabled || values.timeRestriction?.inactiveVisibilityConfig?.libraryTabOnly ? 'text-gray-500' : 'text-gray-300'}`}
                                             >
                                               Users Home
@@ -2263,8 +2531,8 @@ const CollectionConfigForm = ({
                                               }}
                                               className={`form-checkbox ${!checkboxStates.serverOwnerHome.enabled || values.timeRestriction?.inactiveVisibilityConfig?.libraryTabOnly ? 'opacity-50 cursor-not-allowed' : ''}`}
                                             />
-                                            <label 
-                                              htmlFor="inactiveVisibilityServerOwnerHome" 
+                                            <label
+                                              htmlFor="inactiveVisibilityServerOwnerHome"
                                               className={`ml-2 text-sm ${!checkboxStates.serverOwnerHome.enabled || values.timeRestriction?.inactiveVisibilityConfig?.libraryTabOnly ? 'text-gray-500' : 'text-gray-300'}`}
                                             >
                                               Server Owner Home
@@ -2281,8 +2549,8 @@ const CollectionConfigForm = ({
                                               }}
                                               className={`form-checkbox ${!checkboxStates.libraryRecommended.enabled || values.timeRestriction?.inactiveVisibilityConfig?.libraryTabOnly ? 'opacity-50 cursor-not-allowed' : ''}`}
                                             />
-                                            <label 
-                                              htmlFor="inactiveVisibilityLibraryRecommended" 
+                                            <label
+                                              htmlFor="inactiveVisibilityLibraryRecommended"
                                               className={`ml-2 text-sm ${!checkboxStates.libraryRecommended.enabled || values.timeRestriction?.inactiveVisibilityConfig?.libraryTabOnly ? 'text-gray-500' : 'text-gray-300'}`}
                                             >
                                               Library Recommended
@@ -2305,8 +2573,8 @@ const CollectionConfigForm = ({
                                               }}
                                               className={`form-checkbox ${!checkboxStates.libraryTabOnly.enabled ? 'opacity-50 cursor-not-allowed' : ''}`}
                                             />
-                                            <label 
-                                              htmlFor="inactiveVisibilityLibraryTabOnly" 
+                                            <label
+                                              htmlFor="inactiveVisibilityLibraryTabOnly"
                                               className={`ml-2 text-sm ${!checkboxStates.libraryTabOnly.enabled ? 'text-gray-500' : 'text-gray-300'}`}
                                             >
                                               Library Tab Only
@@ -2316,7 +2584,7 @@ const CollectionConfigForm = ({
                                       );
                                     })()}
                                     <div className="text-xs text-gray-400 mt-2">
-                                      {values.timeRestriction?.inactiveVisibilityConfig?.libraryTabOnly 
+                                      {values.timeRestriction?.inactiveVisibilityConfig?.libraryTabOnly
                                         ? 'Collection will only appear in Library tab when inactive'
                                         : 'Choose where the collection should appear when inactive'
                                       }

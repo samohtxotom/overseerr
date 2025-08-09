@@ -29,8 +29,10 @@ interface LibraryCollectionGroupProps {
   library: Library;
   configs: CollectionConfig[];
   originalConfigs: CollectionConfig[];
+  allHubConfigs?: any[]; // All hub configs for detecting linked hubs
   onEdit: (config: CollectionConfig) => void;
   onDelete: (configId: number | string) => void;
+  onHide: (config: CollectionConfig) => void;
   onReorder: (libraryId: string, newOrder: CollectionConfig[]) => void;
   badgeClickCount: number;
   setBadgeClickCount: (value: number | ((prev: number) => number)) => void;
@@ -42,8 +44,10 @@ interface LibraryCollectionGroupProps {
 interface SortableItemProps {
   config: CollectionConfig;
   originalConfigs: CollectionConfig[];
+  allHubConfigs?: any[]; // All hub configs for detecting linked hubs
   onEdit: (config: CollectionConfig) => void;
   onDelete: (configId: number | string) => void;
+  onHide: (config: CollectionConfig) => void;
   setBadgeClickCount: (value: number | ((prev: number) => number)) => void;
   checkForUnlockSequence: () => void;
   getCombinedTypeLabel: (type: string, subtype: string) => string;
@@ -54,8 +58,10 @@ interface SortableItemProps {
 const SortableItem = ({
   config,
   originalConfigs,
+  allHubConfigs,
   onEdit,
   onDelete,
+  onHide,
   setBadgeClickCount,
   checkForUnlockSequence,
   getCombinedTypeLabel,
@@ -64,6 +70,24 @@ const SortableItem = ({
 }: SortableItemProps) => {
   const isLinkedCollection = isAllLibrariesConfig(config, originalConfigs);
   const isHub = config.type === 'hub';
+  
+  // Use the new cleaner categorization flags
+  const isDefaultPlexHub = config.isDefaultPlexHub || false;
+  const isAgregarrManaged = config.isAgregarrManaged || false;  
+  const isPromotedToHub = config.isPromotedToHub || false;
+  
+  // Derive display categories from the flags
+  const isPreExistingCollection = !isDefaultPlexHub && !isAgregarrManaged;
+  
+  // Check if this is a linked hub (appears across multiple libraries)
+  const isLinkedHub = isHub && allHubConfigs ? 
+    allHubConfigs.filter((h: any) => h.hubIdentifier === config.subtype).length > 1 : 
+    false;
+  
+  // Check if this item can be linked (has unlinked siblings of same type)
+  const canBeLinked = isHub && allHubConfigs ? 
+    allHubConfigs.filter((h: any) => h.hubIdentifier === config.subtype).length > 1 && !isLinkedHub :
+    !isLinkedCollection && originalConfigs.filter(c => c.type === config.type && c.subtype === config.subtype).length > 1;
   
   // Check if this item should be greyed out in Recommended tab
   // Items are greyed out if they're visible in Home tab (ordering controlled there)
@@ -82,14 +106,14 @@ const SortableItem = ({
     isDragging,
   } = useSortable({
     id: (() => {
-      // For hub configs, libraryId is always a string, never an array
-      // For collection configs, it might be an array or string
-      const libraryId = isHub 
-        ? config.libraryId || 'unknown'
-        : Array.isArray(config.libraryId) ? config.libraryId[0] : (config.libraryId || 'all');
-      return `${config.id}-${libraryId}`;
+      if (isHub) {
+        return config.id.toString();
+      } else {
+        const libraryId = Array.isArray(config.libraryId) ? config.libraryId[0] : (config.libraryId || 'all');
+        return `${config.id}-${libraryId}`;
+      }
     })(),
-    disabled: isDraggingDisabled, // Disable dragging for greyed out items
+    disabled: isDraggingDisabled,
   });
 
   const style = {
@@ -146,13 +170,40 @@ const SortableItem = ({
         {/* Collection/Hub Info */}
         <div className="flex-1">
           <div className={`flex items-center space-x-3 ${isHub ? 'mb-1' : 'mb-2'}`}>
-            <h5 className={`text-white ${isHub ? 'text-sm font-normal' : 'text-base font-medium'}`}>
+            <h5 className={`text-white ${isHub ? 'text-base font-medium' : 'text-base font-medium'}`}>
               {config.name || 'Unnamed Collection'}
             </h5>
             {isHub && (
-              <Badge badgeType="default" className="!bg-orange-500/20 !text-orange-300 text-xs">
-                Plex Hub
-              </Badge>
+              <>
+                {isDefaultPlexHub && (
+                  <Badge badgeType="default" className="!bg-orange-500/20 !text-orange-300 text-xs">
+                    Plex Default
+                  </Badge>
+                )}
+                {isPreExistingCollection && !isPromotedToHub && (
+                  <Badge badgeType="default" className="!bg-green-500/20 !text-green-300 text-xs">
+                    Pre-Existing Collection
+                  </Badge>
+                )}
+                {isPreExistingCollection && isPromotedToHub && (
+                  <Badge badgeType="default" className="!bg-blue-500/20 !text-blue-300 text-xs">
+                    Pre-Existing Collection (Promoted)
+                  </Badge>
+                )}
+                {isAgregarrManaged && !isPromotedToHub && (
+                  <Badge badgeType="default" className="!bg-indigo-500/20 !text-indigo-300 text-xs">
+                    Agregarr Collection
+                  </Badge>
+                )}
+                {isAgregarrManaged && isPromotedToHub && (
+                  <Badge badgeType="default" className="!bg-purple-500/20 !text-purple-300 text-xs">
+                    Agregarr Collection (Promoted)
+                  </Badge>
+                )}
+                <Badge badgeType="default" className="!bg-gray-800/50 !text-gray-300 text-xs">
+                  {getVisibilityLabel(config.visibilityConfig)}
+                </Badge>
+              </>
             )}
             {config.isExpandedConfig && (
               <Badge badgeType="warning" className="!bg-opacity-40">
@@ -231,17 +282,6 @@ const SortableItem = ({
               )}
             </div>
           )}
-          {/* Hub-specific info */}
-          {isHub && (
-            <div className="flex flex-wrap items-center space-x-2 text-xs">
-              <Badge badgeType="default" className="!bg-gray-800/50 !text-gray-300 text-xs">
-                {getVisibilityLabel(config.visibilityConfig)}
-              </Badge>
-              <span className="text-gray-400">
-                {config.subtype.replace(/\./g, ' → ')}
-              </span>
-            </div>
-          )}
           
           {/* Greyed out message for Recommended tab */}
           {isGreyedInRecommended && (
@@ -255,21 +295,40 @@ const SortableItem = ({
 
       {/* Actions */}
       <div className="flex items-center space-x-2">
-        {isLinkedCollection && (
+        {(isLinkedCollection || isLinkedHub) && (
           <div className="mr-1">
-            <LinkIcon className="h-4 w-4 text-gray-400" title="Linked Collection - applies to all compatible libraries" />
+            <LinkIcon 
+              className="h-4 w-4 text-gray-400" 
+              title={
+                isLinkedHub 
+                  ? "Linked Hub - applies to all compatible libraries" 
+                  : "Linked Collection - applies to all compatible libraries"
+              } 
+            />
           </div>
         )}
         {isHub ? (
-          // Limited actions for hubs - only edit (for visibility)
-          <Button
-            buttonType="ghost"
-            buttonSize="sm"
-            onClick={() => onEdit(config)}
-            className="text-orange-400 hover:text-orange-300"
-          >
-            <PencilIcon className={isHub ? 'h-3 w-3' : 'h-4 w-4'} />
-          </Button>
+          // Limited actions for hubs - edit, link/unlink, and hide
+          <>
+            <Button
+              buttonType="ghost"
+              buttonSize="sm"
+              onClick={() => onEdit(config)}
+              className="text-orange-400 hover:text-orange-300"
+            >
+              <PencilIcon className={isHub ? 'h-3 w-3' : 'h-4 w-4'} />
+            </Button>
+            {activeTab !== 'inactive' && (
+              <ConfirmButton
+                confirmText="Hide"
+                buttonSize="sm"
+                buttonType="primary"
+                onClick={() => onHide(config)}
+              >
+                <TrashIcon className="h-4 w-4" />
+              </ConfirmButton>
+            )}
+          </>
         ) : (
           // Full actions for collections
           <>
@@ -300,8 +359,10 @@ const LibraryCollectionGroup = ({
   library,
   configs,
   originalConfigs,
+  allHubConfigs,
   onEdit,
   onDelete,
+  onHide,
   onReorder,
   badgeClickCount,
   setBadgeClickCount,
@@ -435,37 +496,33 @@ const LibraryCollectionGroup = ({
     if (active.id !== over?.id) {
       const oldIndex = configs.findIndex((config) => {
         const isHub = config.type === 'hub';
-        const libraryId = isHub 
-          ? config.libraryId || 'unknown'
-          : Array.isArray(config.libraryId) ? config.libraryId[0] : (config.libraryId || 'all');
-        return `${config.id}-${libraryId}` === active.id;
+        const dragId = isHub 
+          ? config.id.toString()
+          : `${config.id}-${Array.isArray(config.libraryId) ? config.libraryId[0] : (config.libraryId || 'all')}`;
+        return dragId === active.id;
       });
       const newIndex = configs.findIndex((config) => {
         const isHub = config.type === 'hub';
-        const libraryId = isHub 
-          ? config.libraryId || 'unknown'
-          : Array.isArray(config.libraryId) ? config.libraryId[0] : (config.libraryId || 'all');
-        return `${config.id}-${libraryId}` === over?.id;
+        const dragId = isHub 
+          ? config.id.toString()
+          : `${config.id}-${Array.isArray(config.libraryId) ? config.libraryId[0] : (config.libraryId || 'all')}`;
+        return dragId === over?.id;
       });
+
 
       const newConfigs = arrayMove(configs, oldIndex, newIndex);
 
-      // Update the appropriate sort order based on active tab while preserving the other
       const updatedConfigs = newConfigs.map((config, index) => {
         if (activeTab === 'home' || activeTab === 'recommended') {
-          // Home and Recommended tabs share the same ordering system (Plex hub ordering API)
           return {
             ...config,
             sortOrderHome: index,
-            // Preserve existing sortOrderLibrary
             sortOrderLibrary: config.sortOrderLibrary,
           };
         } else {
-          // Library tab uses sort title ordering
           return {
             ...config,
             sortOrderLibrary: index,
-            // Preserve existing sortOrderHome
             sortOrderHome: config.sortOrderHome,
           };
         }
@@ -511,26 +568,27 @@ const LibraryCollectionGroup = ({
           <SortableContext
             items={configs.map((config) => {
               const isHub = config.type === 'hub';
-              const libraryId = isHub 
-                ? config.libraryId || 'unknown'
-                : Array.isArray(config.libraryId) ? config.libraryId[0] : (config.libraryId || 'all');
-              return `${config.id}-${libraryId}`;
+              return isHub 
+                ? config.id.toString()
+                : `${config.id}-${Array.isArray(config.libraryId) ? config.libraryId[0] : (config.libraryId || 'all')}`;
             })}
             strategy={verticalListSortingStrategy}
           >
             <div className="space-y-2">
               {configs.map((config) => {
                 const isHub = config.type === 'hub';
-                const libraryId = isHub 
-                  ? config.libraryId || 'unknown'
-                  : Array.isArray(config.libraryId) ? config.libraryId[0] : (config.libraryId || 'all');
+                const keyId = isHub 
+                  ? config.id.toString()
+                  : `${config.id}-${Array.isArray(config.libraryId) ? config.libraryId[0] : (config.libraryId || 'all')}`;
                 return (
                   <SortableItem
-                    key={`${config.id}-${libraryId}`}
+                    key={keyId}
                   config={config}
                   originalConfigs={originalConfigs}
+                  allHubConfigs={allHubConfigs}
                   onEdit={onEdit}
                   onDelete={onDelete}
+                  onHide={onHide}
                   setBadgeClickCount={setBadgeClickCount}
                   checkForUnlockSequence={checkForUnlockSequence}
                   getCombinedTypeLabel={getCombinedTypeLabel}

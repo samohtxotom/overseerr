@@ -18,7 +18,7 @@ import type { CollectionVisibilityConfig } from './collections/types';
 export function cleanOverseerrLabels(filterStr: string): string {
   if (!filterStr) return '';
   return filterStr
-    .replace(/Overseerr[^,]*/gi, '')
+    .replace(/Agregarr[^,]*/gi, '')
     .replace(/,,+/g, ',')
     .replace(/^,|,$/g, '')
     .replace(/^label!=$/, '');
@@ -29,9 +29,9 @@ export function cleanOverseerrCollectionLabels(
 ): string[] {
   if (!existingLabels || existingLabels.length === 0) return [];
 
-  // Filter out any existing Overseerr labels, preserving user's custom labels
+  // Filter out any existing Agregarr labels, preserving user's custom labels
   return existingLabels.filter(
-    (label: string) => !label.toLowerCase().startsWith('overseerr')
+    (label: string) => !label.toLowerCase().startsWith('agregarr')
   );
 }
 
@@ -199,8 +199,8 @@ export async function updateCollectionContents(
   const labelName =
     customLabel ||
     (isGlobalCollection
-      ? `OverseerrAll${mediaType === 'movie' ? 'Films' : 'TV'}`
-      : `OverseerrUser${user.plexId}`);
+      ? `AgregarrOverseerrAll${mediaType === 'movie' ? 'Films' : 'TV'}`
+      : `AgregarrOverseerrUser${user.plexId}`);
 
   try {
     // Get library key
@@ -422,8 +422,8 @@ export async function createOrUpdateCollection(
   const labelName =
     customLabel ||
     (isGlobalCollection
-      ? `OverseerrAll${mediaType === 'movie' ? 'Films' : 'TV'}`
-      : `OverseerrUser${user.plexId}`);
+      ? `AgregarrOverseerrAll${mediaType === 'movie' ? 'Films' : 'TV'}`
+      : `AgregarrOverseerrUser${user.plexId}`);
 
   try {
     // Get library key
@@ -572,7 +572,7 @@ export async function createOrUpdateCollection(
           } else {
             // Fallback to old logic if sorting info not provided
             const sortPrefix =
-              isGlobalCollection || labelName.startsWith('OverseerrAll')
+              isGlobalCollection || labelName.startsWith('AgregarrOverseerrAll')
                 ? '!!'
                 : '!!!';
             sortTitle = `${sortPrefix}${collectionTitle}`;
@@ -650,7 +650,7 @@ export async function createOrUpdateCollection(
   }
 }
 
-/*Delete orphaned Overseerr collections for users with no requests
+/*Delete orphaned Agregarr collections for users with no requests
  */
 export async function cleanupOrphanedCollections(
   plexClient: PlexAPI,
@@ -658,27 +658,27 @@ export async function cleanupOrphanedCollections(
 ): Promise<{ deleted: number }> {
   try {
     const allCollections = await plexClient.getAllCollections();
-    const overseerrCollections = allCollections.filter(
+    const agregarrCollections = allCollections.filter(
       (collection: any) =>
         Array.isArray(collection.labels) &&
         collection.labels.some((label: string) =>
-          label.toLowerCase().startsWith('overseerr')
+          label.toLowerCase().startsWith('agregarr')
         )
     );
 
     let deleted = 0;
-    for (const collection of overseerrCollections) {
-      // Extract user Plex ID from overseerr label
-      const overseerrLabel = collection.labels?.find((label: string) =>
-        label.toLowerCase().startsWith('overseerr')
+    for (const collection of agregarrCollections) {
+      // Extract user Plex ID from agregarr label
+      const agregarrLabel = collection.labels?.find((label: string) =>
+        label.toLowerCase().startsWith('agregarr')
       );
 
-      if (overseerrLabel) {
+      if (agregarrLabel) {
         // Handle different label formats
         let userPlexId = '';
-        if (overseerrLabel.toLowerCase().startsWith('overseerruser')) {
-          userPlexId = overseerrLabel.replace(/^OverseerrUser/i, '');
-        } else if (overseerrLabel.toLowerCase().startsWith('overseerr')) {
+        if (agregarrLabel.toLowerCase().startsWith('agregarroverseerruser')) {
+          userPlexId = agregarrLabel.replace(/^AgregarrOverseerrUser/i, '');
+        } else if (agregarrLabel.toLowerCase().startsWith('agregarroverseerr')) {
           // Skip special collections (global, tautulli, trakt)
           continue;
         }
@@ -757,39 +757,39 @@ export async function updateUserFilterSettings(
       currentTvFilter = decodeURIComponent(userServer.$.filterTelevision || '');
     }
 
-    // Clean existing Overseerr labels
+    // Clean existing Agregarr labels
     const cleanedMovieFilter = cleanOverseerrLabels(currentMovieFilter);
     const cleanedTvFilter = cleanOverseerrLabels(currentTvFilter);
 
-    // Generate new Overseerr label restrictions
+    // Generate new Agregarr label restrictions
     const otherUserPlexIds = allUserPlexIds.filter(
       (id) => id !== targetUserPlexId
     );
-    const overseerrLabels = otherUserPlexIds.map((id) => `OverseerrUser${id}`);
+    const agregarrLabels = otherUserPlexIds.map((id) => `AgregarrOverseerrUser${id}`);
     
     // Also exclude server owner collections for non-admin users
     const adminUser = await getAdminUser();
     if (adminUser?.plexId && adminUser.plexId.toString() !== targetUserPlexId) {
-      overseerrLabels.push(`OverseerrOwner${adminUser.plexId}`);
+      agregarrLabels.push(`AgregarrOverseerrOwner${adminUser.plexId}`);
     }
 
     // Combine filters
     let finalMovieFilter = cleanedMovieFilter;
     let finalTvFilter = cleanedTvFilter;
 
-    if (overseerrLabels.length > 0) {
-      const labelFilter = `label!=${overseerrLabels.join(',')}`;
+    if (agregarrLabels.length > 0) {
+      const labelFilter = `label!=${agregarrLabels.join(',')}`;
 
       if (!finalMovieFilter) {
         finalMovieFilter = labelFilter;
       } else if (finalMovieFilter.startsWith('label!=')) {
         const existingLabels = finalMovieFilter.split('!=')[1];
-        finalMovieFilter = `label!=${existingLabels},${overseerrLabels.join(
+        finalMovieFilter = `label!=${existingLabels},${agregarrLabels.join(
           ','
         )}`;
       } else {
         logger.warn(
-          `Non-label filter detected for user ${targetUserPlexId}: "${finalMovieFilter}". Using only Overseerr labels.`
+          `Non-label filter detected for user ${targetUserPlexId}: "${finalMovieFilter}". Using only Agregarr labels.`
         );
         finalMovieFilter = labelFilter;
       }
@@ -798,10 +798,10 @@ export async function updateUserFilterSettings(
         finalTvFilter = labelFilter;
       } else if (finalTvFilter.startsWith('label!=')) {
         const existingLabels = finalTvFilter.split('!=')[1];
-        finalTvFilter = `label!=${existingLabels},${overseerrLabels.join(',')}`;
+        finalTvFilter = `label!=${existingLabels},${agregarrLabels.join(',')}`;
       } else {
         logger.warn(
-          `Non-label filter detected for user ${targetUserPlexId}: "${finalTvFilter}". Using only Overseerr labels.`
+          `Non-label filter detected for user ${targetUserPlexId}: "${finalTvFilter}". Using only Agregarr labels.`
         );
         finalTvFilter = labelFilter;
       }
@@ -842,11 +842,11 @@ export async function updateUserFilterSettings(
   }
 }
 
-/*Remove all Overseerr label filters from all users
+/*Remove all Agregarr label filters from all users
  */
 // Removed: purgeUserLabels - use scheduled cleanup instead
 
-/*Clear Overseerr label filters for a specific user
+/*Clear Agregarr label filters for a specific user
  */
 export async function clearUserFilters(
   userPlexId: string,
@@ -860,7 +860,7 @@ export async function clearUserFilters(
     throw new Error('Machine ID not configured');
   }
 
-  // Get current user filters to preserve non-Overseerr labels
+  // Get current user filters to preserve non-Agregarr labels
   let currentMovieFilter = '';
   let currentTvFilter = '';
 
@@ -885,7 +885,7 @@ export async function clearUserFilters(
     );
   }
 
-  // Clean only Overseerr labels, preserving all other user labels
+  // Clean only Agregarr labels, preserving all other user labels
   const cleanedMovieFilter = cleanOverseerrLabels(currentMovieFilter);
   const cleanedTvFilter = cleanOverseerrLabels(currentTvFilter);
 

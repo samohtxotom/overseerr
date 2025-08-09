@@ -8,6 +8,8 @@ import {
   CogIcon,
   ExclamationTriangleIcon,
   FilmIcon,
+  HomeIcon,
+  QueueListIcon,
   SparklesIcon,
   TvIcon,
   UsersIcon,
@@ -19,6 +21,8 @@ import { Fragment, useEffect, useRef } from 'react';
 import { defineMessages, useIntl } from 'react-intl';
 
 export const menuMessages = defineMessages({
+  home: 'Home',
+  allcollections: 'All Collections',
   dashboard: 'Discover',
   browsemovies: 'Movies',
   browsetv: 'Series',
@@ -51,9 +55,24 @@ interface SidebarLinkProps {
 const SidebarLinks: SidebarLinkProps[] = [
   {
     href: '/',
+    messagesKey: 'home',
+    svgIcon: <HomeIcon className="mr-3 h-6 w-6" />,
+    activeRegExp: /^\/$/,
+    dataTestId: 'sidebar-menu-home',
+  },
+  {
+    href: '/allcollections',
+    messagesKey: 'allcollections',
+    svgIcon: <QueueListIcon className="mr-3 h-6 w-6" />,
+    activeRegExp: /^\/allcollections$/,
+    requiredPermission: Permission.ADMIN,
+    dataTestId: 'sidebar-menu-allcollections',
+  },
+  {
+    href: '/discover',
     messagesKey: 'dashboard',
     svgIcon: <SparklesIcon className="mr-3 h-6 w-6" />,
-    activeRegExp: /^\/(discover\/?)?$/,
+    activeRegExp: /^\/discover\/?/,
   },
   {
     href: '/discover/movies',

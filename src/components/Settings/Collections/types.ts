@@ -75,6 +75,10 @@ export interface CollectionConfig {
       readonly sunday: boolean;
     };
   };
+  // Clear categorization flags (same as PlexHubConfig for consistency)
+  readonly isDefaultPlexHub?: boolean; // True for built-in algorithmic hubs (e.g., "Recently Added")  
+  readonly isAgregarrManaged?: boolean; // True if this collection/hub was created by Agregarr
+  readonly isPromotedToHub?: boolean; // True if this is a collection promoted to appear on home screen
 }
 
 export interface TemplatePreset {
@@ -105,8 +109,13 @@ export interface CollectionConfigFormProps {
   config: CollectionConfig;
   onSave: (config: CollectionConfig) => void;
   onCancel: () => void;
+  onUnlink?: (config: CollectionConfig) => void;
+  onLink?: (config: CollectionConfig) => void;
   isEditing?: boolean;
   libraries: Library[];
+  // Additional data needed for link/unlink detection
+  allCollectionConfigs?: CollectionConfig[];
+  allHubConfigs?: any[];
 }
 
 export interface CollectionConfigListProps {
@@ -134,8 +143,6 @@ export interface PlexHubConfig {
   readonly libraryName: string; // Library display name
   readonly mediaType: 'movie' | 'tv'; // Media type (hubs are always single type)
   readonly sortOrderLibrary: number; // Position in library
-  readonly isPromotedCollection?: boolean; // True if this hub is a promoted collection from our app
-  readonly isUnmanagedCollection?: boolean; // True if this is a custom collection hub without matching collection config
   readonly sourceCollectionId?: number; // ID of the source collection config if this is a promoted collection
   readonly visibilityConfig: {
     usersHome: boolean;
@@ -143,6 +150,10 @@ export interface PlexHubConfig {
     libraryRecommended: boolean;
     libraryTabOnly: boolean;
   };
+  // Clear categorization flags
+  readonly isDefaultPlexHub: boolean; // True for built-in algorithmic hubs (e.g., "Recently Added")  
+  readonly isAgregarrManaged: boolean; // True if this collection/hub was created by Agregarr
+  readonly isPromotedToHub: boolean; // True if this is a collection promoted to appear on home screen
 }
 
 export type CollectionType = 'overseerr' | 'tautulli' | 'trakt' | 'tmdb' | 'imdb' | 'letterboxd' | 'hub';

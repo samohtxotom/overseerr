@@ -4,13 +4,14 @@ import TmdbAPI from '@server/api/themoviedb';
 import { MediaType } from '@server/constants/media';
 import { getRepository } from '@server/datasource';
 import Media from '@server/entity/Media';
-import { updateCollectionContents } from '@server/lib/collectionsUtils';
+// Legacy import removed - now using standardized approach via BaseCollectionSync
 import { BaseCollectionSync } from './BaseCollectionSync';
 import type { CollectionConfig } from '@server/lib/settings';
 import { CollectionSyncErrorType } from './types';
 import type { ImdbTemplateContext, ImdbSourceData, CollectionSyncOptions } from './types';
 import { autoRequestService } from './AutoRequestService';
 import logger from '@server/logger';
+import { API_CONFIG, BATCH_CONFIG } from './ConfigurationConstants';
 
 // ImdbSourceData interface is now imported from types.ts
 
@@ -73,9 +74,9 @@ export class ImdbCollectionSync extends BaseCollectionSync {
 
         const response = await axios.get(config.imdbCustomListUrl, {
           headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            'User-Agent': API_CONFIG.USER_AGENT
           },
-          timeout: 10000
+          timeout: API_CONFIG.HTTP_TIMEOUT
         });
 
         // Parse the HTML to extract movie/TV show items
@@ -106,9 +107,9 @@ export class ImdbCollectionSync extends BaseCollectionSync {
 
         const response = await axios.get(`https://www.imdb.com${predefinedUrl}`, {
           headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            'User-Agent': API_CONFIG.USER_AGENT
           },
-          timeout: 10000
+          timeout: API_CONFIG.HTTP_TIMEOUT
         });
 
         logger.debug('Predefined list response received', {
@@ -141,7 +142,9 @@ export class ImdbCollectionSync extends BaseCollectionSync {
         const item = imdbData[i];
         
         // Log progress every 10 items or for small lists every 5 items
-        const logInterval = imdbData.length > 50 ? 10 : 5;
+        const logInterval = imdbData.length > BATCH_CONFIG.PROGRESS_LOG_THRESHOLD ? 
+          BATCH_CONFIG.PROGRESS_LOG_INTERVAL_LARGE : 
+          BATCH_CONFIG.PROGRESS_LOG_INTERVAL_SMALL;
         if (i % logInterval === 0 || i === imdbData.length - 1) {
           const percentage = Math.round(((i + 1) / imdbData.length) * 100);
           logger.info(`Resolving TMDb IDs: ${i + 1}/${imdbData.length} (${percentage}%)`, {
@@ -462,15 +465,8 @@ export class ImdbCollectionSync extends BaseCollectionSync {
         itemsCount: items.length
       });
 
-      if (config.mediaType === 'both') {
-        return await this.processBothMediaTypes(
-          items, config, plexClient, allCollections, processedCollectionKeys
-        );
-      } else {
-        return await this.processSingleMediaType(
-          items, config, plexClient, allCollections, processedCollectionKeys
-        );
-      }
+      // Use the new media type processing strategy
+      return await this.processWithMediaTypeStrategy(items, config, plexClient, allCollections, processedCollectionKeys);
     } catch (error) {
       logger.error('Error in IMDb processConfiguration', {
         label: 'IMDb Collections Debug',
@@ -493,17 +489,23 @@ export class ImdbCollectionSync extends BaseCollectionSync {
     config: any, 
     processedCollectionKeys?: Set<string>
   ) {
-    const dummyUser = { id: 0 } as any;
-    const result = await updateCollectionContents(
-      dummyUser, items, mediaType, plexClient, allCollections, config.visibilityConfig, 
-      collectionName, true, `OverseerrImdb${config.id}`, processedCollectionKeys,
-      config.sortOrderLibrary, (config as any)._totalCollectionsInLibrary, config.customPoster
+    // Use the new standardized approach via BaseCollectionSync
+    const result = await this.createOrUpdateCollectionStandardized(
+      items,
+      collectionName,
+      mediaType,
+      config,
+      plexClient,
+      allCollections,
+      processedCollectionKeys
     );
+    
     return { 
-      isNew: result.isNew, 
-      hasChanges: result.hasChanges, 
-      collectionName, 
-      itemCount: items.length 
+      created: result.created,
+      updated: result.updated,
+      collectionRatingKey: result.collectionRatingKey,
+      itemCount: result.itemCount || items.length,
+      stats: result.stats
     };
   }
 
@@ -512,91 +514,6 @@ export class ImdbCollectionSync extends BaseCollectionSync {
     await autoRequestService.processAutoRequests(missingItems, config, 'imdb');
   }
 
-  private async processBothMediaTypes(
-    items: any[],
-    config: any,
-    plexClient: any,
-    allCollections: any[],
-    processedCollectionKeys?: Set<string>
-  ): Promise<any> {
-    let totalCreated = 0;
-    let totalUpdated = 0;
-
-    // Split items by media type
-    const { movieItems, tvItems } = this.splitItemsByMediaType(items);
-
-    // Process movies if we have any
-    if (movieItems.length > 0) {
-      const movieTemplate = config.customMovieTemplate || config.template || config.name;
-      const movieCollectionName = this.templateEngine.processTemplate(
-        movieTemplate,
-        await this.createTemplateContext(config, 'movie')
-      );
-      
-      const movieResult = await this.createCollection(
-        movieItems,
-        'movie',
-        movieCollectionName,
-        plexClient,
-        allCollections,
-        config,
-        processedCollectionKeys
-      );
-
-      totalCreated += movieResult.isNew ? 1 : 0;
-      totalUpdated += movieResult.hasChanges && !movieResult.isNew ? 1 : 0;
-    }
-
-    // Process TV shows if we have any
-    if (tvItems.length > 0) {
-      const tvTemplate = config.customTVTemplate || config.template || config.name;
-      const tvCollectionName = this.templateEngine.processTemplate(
-        tvTemplate,
-        await this.createTemplateContext(config, 'tv')
-      );
-
-      const tvResult = await this.createCollection(
-        tvItems,
-        'tv',
-        tvCollectionName,
-        plexClient,
-        allCollections,
-        config,
-        processedCollectionKeys
-      );
-
-      totalCreated += tvResult.isNew ? 1 : 0;
-      totalUpdated += tvResult.hasChanges && !tvResult.isNew ? 1 : 0;
-    }
-
-    return { created: totalCreated, updated: totalUpdated };
-  }
-
-  private async processSingleMediaType(
-    items: any[],
-    config: any,
-    plexClient: any,
-    allCollections: any[],
-    processedCollectionKeys?: Set<string>
-  ): Promise<any> {
-    const mediaType = config.mediaType as 'movie' | 'tv';
-    const collectionName = await this.generateCollectionName(config, mediaType);
-
-    const result = await this.createCollection(
-      items,
-      mediaType,
-      collectionName,
-      plexClient,
-      allCollections,
-      config,
-      processedCollectionKeys
-    );
-
-    return {
-      created: result.isNew ? 1 : 0,
-      updated: result.hasChanges && !result.isNew ? 1 : 0,
-    };
-  }
 
   /**
    * Get the URL path for predefined IMDb lists

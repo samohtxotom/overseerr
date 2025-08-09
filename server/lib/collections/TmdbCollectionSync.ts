@@ -3,7 +3,7 @@ import { MediaType } from '@server/constants/media';
 import { getRepository } from '@server/datasource';
 import { In } from 'typeorm';
 import Media from '@server/entity/Media';
-import { updateCollectionContents } from '@server/lib/collectionsUtils';
+// Legacy import removed - now using standardized approach via BaseCollectionSync
 import { BaseCollectionSync } from './BaseCollectionSync';
 import type { CollectionConfig } from '@server/lib/settings';
 import { CollectionSyncErrorType } from './types';
@@ -171,21 +171,23 @@ export class TmdbCollectionSync extends BaseCollectionSync {
 
     if (items.length === 0) return { created: 0, updated: 0 };
 
-    if (config.mediaType === 'both') {
-      return await this.processBothMediaTypes(items, config, plexClient, allCollections, processedCollectionKeys, stats);
-    } else {
-      return await this.processSingleMediaType(items, config, plexClient, allCollections, processedCollectionKeys, stats);
-    }
+    // Use the new media type processing strategy
+    return await this.processWithMediaTypeStrategy(items, config, plexClient, allCollections, processedCollectionKeys);
   }
 
   protected async createCollection(items: any[], mediaType: 'movie' | 'tv', collectionName: string, plexClient: any, allCollections: any[], config: any, processedCollectionKeys?: Set<string>) {
-    const dummyUser = { id: 0 } as any;
-    const result = await updateCollectionContents(
-      dummyUser, items, mediaType, plexClient, allCollections, config.visibilityConfig, 
-      collectionName, true, `OverseerrTmdb${config.id}`, processedCollectionKeys, 
-      config.sortOrderLibrary, (config as any)._totalCollectionsInLibrary, config.customPoster
+    // Use the new standardized approach via BaseCollectionSync
+    const result = await this.createOrUpdateCollectionStandardized(
+      items,
+      collectionName,
+      mediaType,
+      config,
+      plexClient,
+      allCollections,
+      processedCollectionKeys
     );
-    return { isNew: result.isNew, hasChanges: result.hasChanges, collectionName, itemCount: items.length };
+    
+    return result;
   }
 
   private async handleAutoRequests(missingItems: any[], config: any): Promise<void> {
@@ -193,95 +195,6 @@ export class TmdbCollectionSync extends BaseCollectionSync {
     await autoRequestService.processAutoRequests(missingItems, config, 'tmdb');
   }
 
-  private async processBothMediaTypes(
-    items: any[],
-    config: any,
-    plexClient: any,
-    allCollections: any[],
-    processedCollectionKeys?: Set<string>,
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    stats?: any
-  ): Promise<any> {
-    let totalCreated = 0;
-    let totalUpdated = 0;
-
-    // Split items by media type
-    const { movieItems, tvItems } = this.splitItemsByMediaType(items);
-
-    // Process movies if we have any
-    if (movieItems.length > 0) {
-      const movieTemplate = config.customMovieTemplate || config.template || config.name;
-      const movieCollectionName = this.templateEngine.processTemplate(
-        movieTemplate,
-        await this.createTemplateContext(config, 'movie')
-      );
-      
-      const movieResult = await this.createCollection(
-        movieItems,
-        'movie',
-        movieCollectionName,
-        plexClient,
-        allCollections,
-        config,
-        processedCollectionKeys
-      );
-
-      totalCreated += movieResult.isNew ? 1 : 0;
-      totalUpdated += movieResult.hasChanges && !movieResult.isNew ? 1 : 0;
-    }
-
-    // Process TV shows if we have any
-    if (tvItems.length > 0) {
-      const tvTemplate = config.customTVTemplate || config.template || config.name;
-      const tvCollectionName = this.templateEngine.processTemplate(
-        tvTemplate,
-        await this.createTemplateContext(config, 'tv')
-      );
-
-      const tvResult = await this.createCollection(
-        tvItems,
-        'tv',
-        tvCollectionName,
-        plexClient,
-        allCollections,
-        config,
-        processedCollectionKeys
-      );
-
-      totalCreated += tvResult.isNew ? 1 : 0;
-      totalUpdated += tvResult.hasChanges && !tvResult.isNew ? 1 : 0;
-    }
-
-    return { created: totalCreated, updated: totalUpdated };
-  }
-
-  private async processSingleMediaType(
-    items: any[],
-    config: any,
-    plexClient: any,
-    allCollections: any[],
-    processedCollectionKeys?: Set<string>,
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    stats?: any
-  ): Promise<any> {
-    const mediaType = config.mediaType as 'movie' | 'tv';
-    const collectionName = await this.generateCollectionName(config, mediaType);
-
-    const result = await this.createCollection(
-      items,
-      mediaType,
-      collectionName,
-      plexClient,
-      allCollections,
-      config,
-      processedCollectionKeys
-    );
-
-    return {
-      created: result.isNew ? 1 : 0,
-      updated: result.hasChanges && !result.isNew ? 1 : 0,
-    };
-  }
 }
 
 export default TmdbCollectionSync;

@@ -1,6 +1,7 @@
 import type { CollectionConfig } from '@server/lib/settings';
 import type { Library } from '@server/lib/settings';
 import logger from '@server/logger';
+import { SORT_CONFIG } from './ConfigurationConstants';
 
 /**
  * Utility class to expand collection configurations with libraryId: "all"
@@ -259,7 +260,7 @@ export class LibraryConfigExpander {
   private static generateExpandedId(parentId: number, libraryId: string): number {
     // Create a unique ID by combining parent ID with library ID hash
     const libraryHash = parseInt(libraryId) || libraryId.charCodeAt(0);
-    return parentId * 1000 + libraryHash;
+    return parentId * SORT_CONFIG.CONFIG_ID_MULTIPLIER + libraryHash;
   }
   
   /**

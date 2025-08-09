@@ -1,11 +1,9 @@
 import type PlexAPI from '@server/api/plexapi';
-import { getRepository } from '@server/datasource';
-import { In } from 'typeorm';
-import { MediaRequest } from '@server/entity/MediaRequest';
-import { User } from '@server/entity/User';
-import { updateCollectionContents, getAdminUser } from '@server/lib/collectionsUtils';
+// Now using standardized approach via BaseCollectionSync - no longer needs legacy method
+import { overseerrCollectionService } from './OverseerrCollectionService';
 import type { CollectionConfig } from '@server/lib/settings';
 import logger from '@server/logger';
+import { COLLECTION_LIMITS, getRuntimeConfig } from './ConfigurationConstants';
 import { BaseCollectionSync } from './BaseCollectionSync';
 import type {
   CollectionItem,
@@ -25,7 +23,7 @@ interface OverseerrCollectionItem extends CollectionItem {
 }
 
 interface UserCollections {
-  user: User;
+  user: any; // OverseerrUser from service layer
   movies: OverseerrCollectionItem[];
   tv: OverseerrCollectionItem[];
 }
@@ -45,6 +43,18 @@ interface UserCollectionsMap {
 export class OverseerrCollectionSync extends BaseCollectionSync {
   constructor() {
     super('overseerr');
+  }
+
+  /**
+   * Get the maximum items limit for a collection config
+   */
+  private getMaxItems(config: CollectionConfig): number {
+    if (config.maxItems && config.maxItems > 0) {
+      return config.maxItems;
+    }
+    
+    const runtimeConfig = getRuntimeConfig();
+    return runtimeConfig.defaultMaxItems;
   }
 
   /**
@@ -97,8 +107,8 @@ export class OverseerrCollectionSync extends BaseCollectionSync {
     let created = 0;
     let updated = 0;
 
-    // Get admin user for context
-    const adminUser = await getAdminUser();
+    // Get admin user for context using service layer
+    const adminUser = await overseerrCollectionService.getAdminUser();
     if (!adminUser) {
       logger.error('Admin user not found for server owner collection', {
         label: 'Overseerr Collections',
@@ -107,12 +117,8 @@ export class OverseerrCollectionSync extends BaseCollectionSync {
       return { created: 0, updated: 0 };
     }
 
-    // Get full admin user details
-    const userRepository = getRepository(User);
-    const fullAdminUser = await userRepository.findOne({
-      where: { id: adminUser.id },
-      select: ['id', 'plexId', 'plexTitle', 'plexUsername', 'username', 'email']
-    });
+    // Admin user from service layer already has all necessary fields
+    const fullAdminUser = adminUser;
 
     if (!fullAdminUser) {
       logger.error('Full admin user details not found', {
@@ -127,54 +133,44 @@ export class OverseerrCollectionSync extends BaseCollectionSync {
       if (movieItems.length > 0 && (config.mediaType === 'both' || config.mediaType === 'movie')) {
         const movieCollectionName = this.createServerOwnerCollectionName(fullAdminUser, config, 'movie');
         
-        const result = await updateCollectionContents(
-          fullAdminUser,
-          movieItems.slice(0, config.maxItems || 1000),
+        const result = await this.createOrUpdateCollectionStandardized(
+          movieItems.slice(0, this.getMaxItems(config)),
+          movieCollectionName,
           'movie',
+          config,
           plexClient,
           allCollections,
-          config.visibilityConfig,
-          movieCollectionName,
-          false, // not global collection
-          `OverseerrOwner${fullAdminUser.plexId || fullAdminUser.id}`, // Custom label for server owner
           processedCollectionKeys,
-          config.sortOrderLibrary,
-          (config as any)._totalCollectionsInLibrary,
-          config.customPoster
+          {
+            userId: fullAdminUser.plexId || fullAdminUser.id,
+            customLabel: `AgregarrOverseerrOwner${fullAdminUser.plexId || fullAdminUser.id}`
+          }
         );
         
-        if (result.isNew) {
-          created++;
-        } else if (result.hasChanges) {
-          updated++;
-        }
+        created += result.created;
+        updated += result.updated;
       }
 
       // Process TV if we have any and config allows TV
       if (tvItems.length > 0 && (config.mediaType === 'both' || config.mediaType === 'tv')) {
         const tvCollectionName = this.createServerOwnerCollectionName(fullAdminUser, config, 'tv');
         
-        const result = await updateCollectionContents(
-          fullAdminUser,
-          tvItems.slice(0, config.maxItems || 1000),
+        const result = await this.createOrUpdateCollectionStandardized(
+          tvItems.slice(0, this.getMaxItems(config)),
+          tvCollectionName,
           'tv',
+          config,
           plexClient,
           allCollections,
-          config.visibilityConfig,
-          tvCollectionName,
-          false, // not global collection
-          `OverseerrOwner${fullAdminUser.plexId || fullAdminUser.id}`, // Custom label for server owner
           processedCollectionKeys,
-          config.sortOrderLibrary,
-          (config as any)._totalCollectionsInLibrary,
-          config.customPoster
+          {
+            userId: fullAdminUser.plexId || fullAdminUser.id,
+            customLabel: `AgregarrOverseerrOwner${fullAdminUser.plexId || fullAdminUser.id}`
+          }
         );
         
-        if (result.isNew) {
-          created++;
-        } else if (result.hasChanges) {
-          updated++;
-        }
+        created += result.created;
+        updated += result.updated;
       }
     } catch (error) {
       logger.error(`Failed to process server owner collection for ${config.name}`, {
@@ -232,27 +228,22 @@ export class OverseerrCollectionSync extends BaseCollectionSync {
             'movie'
           );
           
-          const result = await updateCollectionContents(
-            user,
+          const result = await this.createOrUpdateCollectionStandardized(
             movieItems,
+            movieCollectionName,
             'movie',
+            config,
             plexClient,
             allCollections,
-            config.visibilityConfig,
-            movieCollectionName,
-            false, // not global collection
-            undefined, // No custom label - will use default OverseerrUser{plexId} format
             processedCollectionKeys,
-            config.sortOrderLibrary,
-            (config as any)._totalCollectionsInLibrary,
-            config.customPoster
+            {
+              userId: user.plexId || user.id
+              // customLabel omitted - will use default AgregarrOverseerrUser{userId} format
+            }
           );
           
-          if (result.isNew) {
-            created++;
-          } else if (result.hasChanges) {
-            updated++;
-          }
+          created += result.created;
+          updated += result.updated;
         }
 
         // Process TV collection only if config allows TV
@@ -263,27 +254,22 @@ export class OverseerrCollectionSync extends BaseCollectionSync {
             'tv'
           );
           
-          const result = await updateCollectionContents(
-            user,
+          const result = await this.createOrUpdateCollectionStandardized(
             tvItems,
+            tvCollectionName,
             'tv',
+            config,
             plexClient,
             allCollections,
-            config.visibilityConfig,
-            tvCollectionName,
-            false, // not global collection
-            undefined, // No custom label - will use default OverseerrUser{plexId} format  
             processedCollectionKeys,
-            config.sortOrderLibrary,
-            (config as any)._totalCollectionsInLibrary,
-            config.customPoster
+            {
+              userId: user.plexId || user.id
+              // customLabel omitted - will use default AgregarrOverseerrUser{userId} format
+            }
           );
           
-          if (result.isNew) {
-            created++;
-          } else if (result.hasChanges) {
-            updated++;
-          }
+          created += result.created;
+          updated += result.updated;
         }
       } catch (error) {
         failed++;
@@ -321,7 +307,7 @@ export class OverseerrCollectionSync extends BaseCollectionSync {
    */
   public async processCollectionsWithSharedData(
     collectionConfigs: CollectionConfig[],
-    sharedRequests: MediaRequest[],
+    sharedRequests: any[], // OverseerrMediaRequest[]
     plexClient: PlexAPI,
     allCollections: any[],
     processedCollectionKeys?: Set<string>,
@@ -452,14 +438,13 @@ export class OverseerrCollectionSync extends BaseCollectionSync {
    * Validate that Overseerr collections can be processed
    */
   protected async validateConfiguration(): Promise<void> {
-    // Overseerr collections don't require external API configuration
-    // Just verify we can access the database
+    // Test if we can get basic data from the service layer
     try {
-      await getRepository(MediaRequest).count();
+      await overseerrCollectionService.getAdminUser();
     } catch (error) {
       throw this.createSyncError(
         CollectionSyncErrorType.DATABASE_ERROR,
-        'Cannot access MediaRequest database for Overseerr collections'
+        'Cannot access Overseerr data for collections (check connection if using external mode)'
       );
     }
   }
@@ -548,51 +533,59 @@ export class OverseerrCollectionSync extends BaseCollectionSync {
   }
 
   /**
-   * Fetch data from database (MediaRequest entities)
+   * Fetch data from service layer (approved requests)
    * For performance, this should be called once and shared across all Overseerr collections
    */
   protected async fetchSourceData(
     config: CollectionConfig,
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     options?: CollectionSyncOptions
-  ): Promise<MediaRequest[]> {
-    const mediaRequestRepository = getRepository(MediaRequest);
+  ): Promise<any[]> { // Return OverseerrMediaRequest[] from service layer
+    // Get all approved requests from service layer
+    let requests = await overseerrCollectionService.getApprovedRequests();
 
-    // Build query based on configuration
-    let query = mediaRequestRepository
-      .createQueryBuilder('request')
-      .leftJoinAndSelect('request.requestedBy', 'requestedBy')
-      .leftJoinAndSelect('request.media', 'media')
-      .where('request.media IS NOT NULL')
-      .andWhere('request.requestedBy IS NOT NULL')
-      .andWhere('requestedBy.plexId IS NOT NULL') // Only users with Plex IDs
-      // Explicitly exclude Trakt service users from Overseerr collections
-      .andWhere('requestedBy.email NOT LIKE :traktServiceUser', {
-        traktServiceUser: 'donotchangeme@%.traktcollections',
-      })
-      .andWhere(
-        '((request.is4k = 0 AND media.ratingKey IS NOT NULL AND media.ratingKey != "" AND media.ratingKey != "null" AND media.ratingKey != "undefined") OR ' +
-          '(request.is4k = 1 AND media.ratingKey4k IS NOT NULL AND media.ratingKey4k != "" AND media.ratingKey4k != "null" AND media.ratingKey4k != "undefined"))'
-      );
+    // Apply filtering similar to the old database query
+    requests = requests.filter(request => {
+      // Only requests with media and user data
+      if (!request.media || !request.requestedBy) return false;
+      
+      // Exclude Trakt service users from Overseerr collections
+      if (request.requestedBy && typeof request.requestedBy === 'object' && 'email' in request.requestedBy) {
+        const email = (request.requestedBy as any).email;
+        if (email && email.includes('@') && email.includes('traktcollections')) {
+          return false;
+        }
+      }
 
-    // Apply media type filter if specified
-    if (config.mediaType && config.mediaType !== 'both') {
-      query = query.andWhere('request.type = :mediaType', {
-        mediaType: config.mediaType,
-      });
-    }
+      // Check for valid rating keys
+      const hasValidRatingKey = request.is4k 
+        ? (request.media.ratingKey4k && 
+           request.media.ratingKey4k !== '' && 
+           request.media.ratingKey4k !== 'null' && 
+           request.media.ratingKey4k !== 'undefined')
+        : (request.media.ratingKey && 
+           request.media.ratingKey !== '' && 
+           request.media.ratingKey !== 'null' && 
+           request.media.ratingKey !== 'undefined');
+      
+      if (!hasValidRatingKey) return false;
 
-    // Note: 4K filtering would be based on request.is4k field, but CollectionConfig doesn't have is4k property
-    // This is handled in the mapping stage instead
+      // Apply media type filter if specified
+      if (config.mediaType && config.mediaType !== 'both') {
+        if (request.type !== config.mediaType) return false;
+      }
+
+      return true;
+    });
 
     // Apply user filter for server_owner subtype
     if (config.subtype === 'server_owner') {
       const adminUser = await this.getServerOwnerUser();
       
       if (adminUser) {
-        query = query.andWhere('request.requestedBy = :userId', {
-          userId: adminUser.id,
-        });
+        requests = requests.filter(request => 
+          request.requestedBy && request.requestedBy.id === adminUser.id
+        );
       } else {
         logger.warn('No server owner found for server_owner collection', {
           label: 'Overseerr Collections',
@@ -602,19 +595,22 @@ export class OverseerrCollectionSync extends BaseCollectionSync {
       }
     }
 
-    // Apply ordering (newest first) and no database limit
-    // Get all records and limit during processing
-    query = query
-      .orderBy('request.createdAt', 'DESC'); // Reverse chronological order - newest requests first
+    // Sort by creation date (newest first)
+    // Note: API data has createdAt as string, convert for comparison
+    requests.sort((a, b) => {
+      const dateA = new Date(a.createdAt).getTime();
+      const dateB = new Date(b.createdAt).getTime();
+      return dateB - dateA; // Descending (newest first)
+    });
 
-    return await query.getMany();
+    return requests;
   }
 
   /**
-   * Map MediaRequest data to standardized collection items
+   * Map OverseerrMediaRequest data to standardized collection items
    */
   protected async mapSourceDataToItems(
-    sourceData: MediaRequest[],
+    sourceData: any[], // OverseerrMediaRequest[] from service layer
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     config: CollectionConfig
   ): Promise<{
@@ -633,7 +629,7 @@ export class OverseerrCollectionSync extends BaseCollectionSync {
 
       mappedItems.push({
         ratingKey: ratingKey.toString(),
-        title: (request.media as any)?.title || 'Unknown', // Cast to any to handle complex Media type
+        title: request.media?.title || 'Unknown',
         type: request.type as 'movie' | 'tv',
         requestId: request.id,
         userId: request.requestedBy.id,
@@ -669,7 +665,7 @@ export class OverseerrCollectionSync extends BaseCollectionSync {
     allCollections: any[],
     config: CollectionConfig,
     processedCollectionKeys?: Set<string>,
-    userOverride?: User // Optional user override for user collections
+    userOverride?: any // Optional user override for user collections (OverseerrUser)
   ): Promise<CollectionOperationResult> {
     try {
       // Use userOverride for user collections, otherwise create context based on subtype
@@ -677,27 +673,26 @@ export class OverseerrCollectionSync extends BaseCollectionSync {
       const customLabel = this.createLabelForSubtype(config, userContext);
 
 
-      const result = await updateCollectionContents(
-        userContext,
+      const result = await this.createOrUpdateCollectionStandardized(
         items,
+        collectionName,
         mediaType,
+        config,
         plexClient,
         allCollections,
-        config.visibilityConfig,
-        collectionName,
-        false, // isGlobalCollection - let the function determine based on subtype
-        customLabel,
         processedCollectionKeys,
-        config.sortOrderLibrary,
-        (config as any)._totalCollectionsInLibrary,
-        config.customPoster
+        {
+          userId: userContext?.plexId || userContext?.id,
+          customLabel
+        }
       );
 
       return {
-        isNew: result.isNew,
-        hasChanges: result.hasChanges,
-        collectionName,
-        itemCount: items.length,
+        created: result.created,
+        updated: result.updated,
+        collectionRatingKey: result.collectionRatingKey,
+        itemCount: result.itemCount || items.length,
+        stats: result.stats
       };
     } catch (error) {
       throw this.createSyncError(
@@ -775,24 +770,8 @@ export class OverseerrCollectionSync extends BaseCollectionSync {
       return { created: 0, updated: 0 };
     }
 
-    // Process based on media type configuration
-    if (config.mediaType === 'both') {
-      return await this.processBothMediaTypes(
-        items,
-        config,
-        plexClient,
-        allCollections,
-        processedCollectionKeys
-      );
-    } else {
-      return await this.processSingleMediaType(
-        items,
-        config,
-        plexClient,
-        allCollections,
-        processedCollectionKeys
-      );
-    }
+    // Use the new media type processing strategy
+    return await this.processWithMediaTypeStrategy(items, config, plexClient, allCollections, processedCollectionKeys);
   }
 
   private async processServerOwnerCollection(
@@ -813,24 +792,8 @@ export class OverseerrCollectionSync extends BaseCollectionSync {
       return { created: 0, updated: 0 };
     }
 
-    // Process based on media type configuration - same as global
-    if (config.mediaType === 'both') {
-      return await this.processBothMediaTypes(
-        items,
-        config,
-        plexClient,
-        allCollections,
-        processedCollectionKeys
-      );
-    } else {
-      return await this.processSingleMediaType(
-        items,
-        config,
-        plexClient,
-        allCollections,
-        processedCollectionKeys
-      );
-    }
+    // Use the new media type processing strategy
+    return await this.processWithMediaTypeStrategy(items, config, plexClient, allCollections, processedCollectionKeys);
   }
 
   private async processUserCollection(
@@ -843,11 +806,10 @@ export class OverseerrCollectionSync extends BaseCollectionSync {
     let totalCreated = 0;
     let totalUpdated = 0;
 
-    // Split items by media type
-    const { movieItems, tvItems } = this.splitItemsByMediaType([
-      ...userCollections.movies,
-      ...userCollections.tv,
-    ]);
+    // Split items by media type for user collection processing
+    const allItems = [...userCollections.movies, ...userCollections.tv];
+    const movieItems = allItems.filter(item => item.type === 'movie');
+    const tvItems = allItems.filter(item => item.type === 'tv');
 
     // Process movies if we have any
     if (movieItems.length > 0) {
@@ -857,7 +819,7 @@ export class OverseerrCollectionSync extends BaseCollectionSync {
         'movie'
       );
       const movieResult = await this.createCollection(
-        movieItems.slice(0, config.maxItems || 1000), // Apply item limit
+        movieItems.slice(0, this.getMaxItems(config)), // Apply item limit
         'movie',
         movieCollectionName,
         plexClient,
@@ -867,8 +829,8 @@ export class OverseerrCollectionSync extends BaseCollectionSync {
         userCollections.user // Pass the real user for user collections
       );
 
-      totalCreated += movieResult.isNew ? 1 : 0;
-      totalUpdated += movieResult.hasChanges && !movieResult.isNew ? 1 : 0;
+      totalCreated += movieResult.created;
+      totalUpdated += movieResult.updated;
     }
 
     // Process TV shows if we have any
@@ -879,7 +841,7 @@ export class OverseerrCollectionSync extends BaseCollectionSync {
         'tv'
       );
       const tvResult = await this.createCollection(
-        tvItems.slice(0, config.maxItems || 1000), // Apply item limit
+        tvItems.slice(0, this.getMaxItems(config)), // Apply item limit
         'tv',
         tvCollectionName,
         plexClient,
@@ -889,88 +851,13 @@ export class OverseerrCollectionSync extends BaseCollectionSync {
         userCollections.user // Pass the real user for user collections
       );
 
-      totalCreated += tvResult.isNew ? 1 : 0;
-      totalUpdated += tvResult.hasChanges && !tvResult.isNew ? 1 : 0;
+      totalCreated += tvResult.created;
+      totalUpdated += tvResult.updated;
     }
 
     return { created: totalCreated, updated: totalUpdated };
   }
 
-  private async processBothMediaTypes(
-    items: CollectionItem[],
-    config: CollectionConfig,
-    plexClient: PlexAPI,
-    allCollections: any[],
-    processedCollectionKeys?: Set<string>
-  ): Promise<SyncResult> {
-    let totalCreated = 0;
-    let totalUpdated = 0;
-
-    // Split items by media type
-    const { movieItems, tvItems } = this.splitItemsByMediaType(items);
-
-    // Process movies if we have any
-    if (movieItems.length > 0) {
-      const movieCollectionName = await this.generateCollectionNameWithCustom(config, 'movie');
-      const movieResult = await this.createCollection(
-        movieItems.slice(0, config.maxItems || 1000), // Apply item limit
-        'movie',
-        movieCollectionName,
-        plexClient,
-        allCollections,
-        config,
-        processedCollectionKeys
-      );
-
-      totalCreated += movieResult.isNew ? 1 : 0;
-      totalUpdated += movieResult.hasChanges && !movieResult.isNew ? 1 : 0;
-    }
-
-    // Process TV shows if we have any
-    if (tvItems.length > 0) {
-      const tvCollectionName = await this.generateCollectionNameWithCustom(config, 'tv');
-      const tvResult = await this.createCollection(
-        tvItems.slice(0, config.maxItems || 1000), // Apply item limit
-        'tv',
-        tvCollectionName,
-        plexClient,
-        allCollections,
-        config,
-        processedCollectionKeys
-      );
-
-      totalCreated += tvResult.isNew ? 1 : 0;
-      totalUpdated += tvResult.hasChanges && !tvResult.isNew ? 1 : 0;
-    }
-
-    return { created: totalCreated, updated: totalUpdated };
-  }
-
-  private async processSingleMediaType(
-    items: CollectionItem[],
-    config: CollectionConfig,
-    plexClient: PlexAPI,
-    allCollections: any[],
-    processedCollectionKeys?: Set<string>
-  ): Promise<SyncResult> {
-    const mediaType = config.mediaType as 'movie' | 'tv';
-    const collectionName = await this.generateCollectionName(config, mediaType);
-
-    const result = await this.createCollection(
-      items.slice(0, config.maxItems || 1000), // Apply item limit
-      mediaType,
-      collectionName,
-      plexClient,
-      allCollections,
-      config,
-      processedCollectionKeys
-    );
-
-    return {
-      created: result.isNew ? 1 : 0,
-      updated: result.hasChanges && !result.isNew ? 1 : 0,
-    };
-  }
 
   // Helper methods
 
@@ -983,26 +870,15 @@ export class OverseerrCollectionSync extends BaseCollectionSync {
 
   private async groupItemsByUser(items: OverseerrCollectionItem[]): Promise<UserCollectionsMap> {
     const userCollectionsMap: UserCollectionsMap = {};
-    const userRepository = getRepository(User);
 
     // Get unique user IDs
     const userIds = [...new Set(items.map(item => item.userId))];
     
-    // Fetch all users at once for efficiency with required fields
-    const users = await userRepository.find({
-      where: { id: In(userIds) },
-      select: [
-        'id',
-        'plexId', 
-        'plexTitle',
-        'plexUsername',
-        'username',
-        'email'
-      ]
-    });
+    // Get users from service layer (will handle both internal and external modes)
+    const allUsers = await overseerrCollectionService.getUsersWithPlexIds();
     
-    
-    const usersById = new Map(users.map(user => [user.id, user]));
+    // Create map for efficient lookup
+    const usersById = new Map(allUsers.map(user => [user.id, user]));
 
     for (const item of items) {
       if (!userCollectionsMap[item.userId]) {
@@ -1013,7 +889,7 @@ export class OverseerrCollectionSync extends BaseCollectionSync {
         }
         
         userCollectionsMap[item.userId] = {
-          user,
+          user: user as any, // Convert OverseerrUser to User interface
           movies: [],
           tv: [],
         };
@@ -1031,7 +907,7 @@ export class OverseerrCollectionSync extends BaseCollectionSync {
   }
 
   private createUserCollectionName(
-    user: User,
+    user: any, // OverseerrUser from service layer
     config: CollectionConfig,
     mediaType: 'movie' | 'tv'
   ): string {
@@ -1049,7 +925,7 @@ export class OverseerrCollectionSync extends BaseCollectionSync {
   }
 
   private createServerOwnerCollectionName(
-    user: User,
+    user: any, // OverseerrUser from service layer
     config: CollectionConfig,
     mediaType: 'movie' | 'tv'
   ): string {
@@ -1099,34 +975,19 @@ export class OverseerrCollectionSync extends BaseCollectionSync {
   private createLabelForSubtype(config: CollectionConfig, user: any): string {
     switch (config.subtype) {
       case 'global':
-        return `OverseerrAll${config.mediaType === 'movie' ? 'Films' : 'TV'}`;
+        return `AgregarrOverseerrAll${config.id}`;
       case 'server_owner':
-        return `OverseerrOwner${user.plexId || user.id}`;
+        return `AgregarrOverseerrOwner${user.plexId || user.id}`;
       case 'users':
-        return `OverseerrUser${user.plexId || user.id}`;
+        return `AgregarrOverseerrUser${user.plexId || user.id}`;
       default:
-        return `OverseerrAll${config.mediaType === 'movie' ? 'Films' : 'TV'}`;
+        return `AgregarrOverseerrAll${config.id}`;
     }
   }
 
-  private async getServerOwnerUser(): Promise<User | null> {
-    // Get the basic admin user record first
-    const adminUser = await getAdminUser();
-    if (!adminUser) return null;
-    
-    // Then fetch the full user record with all necessary fields
-    const userRepository = getRepository(User);
-    return await userRepository.findOne({
-      where: { id: adminUser.id },
-      select: [
-        'id',
-        'plexId', 
-        'plexTitle',
-        'plexUsername',
-        'username',
-        'email'
-      ]
-    });
+  private async getServerOwnerUser(): Promise<any | null> { // Returns OverseerrUser from service layer
+    // Get admin user from service layer (already has all necessary fields)
+    return await overseerrCollectionService.getAdminUser();
   }
 }
 

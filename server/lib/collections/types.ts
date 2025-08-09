@@ -97,14 +97,20 @@ export interface CollectionCreateConfig {
  * Result of collection creation/update operation
  */
 export interface CollectionOperationResult {
-  /** Whether this was a new collection */
-  isNew: boolean;
-  /** Whether the collection had changes */
-  hasChanges: boolean;
-  /** Final collection name */
-  collectionName: string;
+  /** Number of collections created */
+  created: number;
+  /** Number of collections updated */
+  updated: number;
+  /** Plex rating key of the collection (if created/updated) */
+  collectionRatingKey?: string;
   /** Number of items in the collection */
   itemCount: number;
+  /** Optional update statistics */
+  stats?: {
+    added: number;
+    removed: number;
+    reordered: boolean;
+  };
   /** Optional error information */
   error?: string;
 }

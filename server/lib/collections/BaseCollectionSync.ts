@@ -5,6 +5,12 @@ import type { TemplateEngine } from './TemplateEngine';
 import { templateEngine } from './TemplateEngine';
 import type { ServiceUserManager } from './ServiceUserManager';
 import { serviceUserManager } from './ServiceUserManager';
+import { 
+  mediaTypeProcessorFactory,
+  type MediaTypeProcessor,
+  type MediaProcessingContext,
+  type MediaProcessingResult 
+} from './MediaTypeStrategies';
 import type {
   CollectionItem,
   SyncResult,
@@ -24,6 +30,8 @@ import type {
 import { CollectionSyncErrorType } from './types';
 import { TimeRestrictionUtils } from './TimeRestrictionUtils';
 import { CollectionConfigUpdater } from './CollectionConfigUpdater';
+import { CollectionSyncUtils } from './CollectionSyncUtils';
+import CollectionUpdateStrategy from './CollectionUpdateStrategy';
 
 /**
  * Abstract base class for all collection sync implementations
@@ -301,19 +309,6 @@ export abstract class BaseCollectionSync implements CollectionSyncInterface {
   }
 
   /**
-   * Split collection items by media type
-   */
-  protected splitItemsByMediaType(items: CollectionItem[]): {
-    movieItems: CollectionItem[];
-    tvItems: CollectionItem[];
-  } {
-    const movieItems = items.filter(item => item.type === 'movie');
-    const tvItems = items.filter(item => item.type === 'tv');
-    
-    return { movieItems, tvItems };
-  }
-
-  /**
    * Create filtering statistics
    */
   protected createFilteringStats(
@@ -339,6 +334,231 @@ export abstract class BaseCollectionSync implements CollectionSyncInterface {
       const libraryId = Array.isArray(config.libraryId) ? config.libraryId[0] : config.libraryId;
       CollectionConfigUpdater.updateConfigWithRatingKey(config.id, collectionRatingKey, libraryId);
     }
+  }
+
+  /**
+   * Validate and sanitize collection items before processing
+   */
+  protected validateAndSanitizeItems(items: CollectionItem[]): {
+    validItems: CollectionItem[];
+    invalidItems: any[];
+    validationErrors: string[];
+  } {
+    const validation = CollectionSyncUtils.validateCollectionItems(items);
+    
+    if (validation.errors.length > 0) {
+      logger.warn(
+        `Found ${validation.invalid.length} invalid items in ${this.source} collection`,
+        {
+          label: `${this.source} Collections`,
+          errors: validation.errors.slice(0, 5), // Log first 5 errors to avoid spam
+          totalErrors: validation.errors.length,
+        }
+      );
+    }
+
+    return {
+      validItems: validation.valid,
+      invalidItems: validation.invalid,
+      validationErrors: validation.errors,
+    };
+  }
+
+  /**
+   * Apply common filtering to collection items (duplicates, invalid items, etc.)
+   */
+  protected applyCommonFiltering(
+    items: CollectionItem[],
+    config: CollectionConfig
+  ): {
+    filteredItems: CollectionItem[];
+    stats: FilteringStats;
+  } {
+    const originalCount = items.length;
+    const removalReasons: Record<string, number> = {};
+
+    // Remove duplicates based on ratingKey
+    const uniqueItems = items.reduce((acc, item) => {
+      const existing = acc.find(existing => existing.ratingKey === item.ratingKey);
+      if (existing) {
+        removalReasons.duplicates = (removalReasons.duplicates || 0) + 1;
+        return acc;
+      }
+      return [...acc, item];
+    }, [] as CollectionItem[]);
+
+    // Apply maxItems limit if specified
+    let finalItems = uniqueItems;
+    if (config.maxItems && config.maxItems > 0 && uniqueItems.length > config.maxItems) {
+      finalItems = uniqueItems.slice(0, config.maxItems);
+      removalReasons.maxItemsLimit = uniqueItems.length - config.maxItems;
+    }
+
+    return {
+      filteredItems: finalItems,
+      stats: this.createFilteringStats(originalCount, finalItems.length, removalReasons),
+    };
+  }
+
+  /**
+   * Log collection processing results with standardized format
+   */
+  protected logProcessingResults(
+    config: CollectionConfig,
+    result: CollectionOperationResult,
+    processingTime: number,
+    additionalContext?: Record<string, any>
+  ): void {
+    const logLevel = result.created > 0 || result.updated > 0 ? 'info' : 'debug';
+    const action = result.created > 0 ? 'created' : result.updated > 0 ? 'updated' : 'processed';
+
+    logger[logLevel](
+      `Collection ${action}: ${config.name} (${result.itemCount || 0} items)`,
+      {
+        label: `${this.source} Collections`,
+        configId: config.id,
+        configName: config.name,
+        action,
+        created: result.created,
+        updated: result.updated,
+        itemCount: result.itemCount,
+        processingTime,
+        ...additionalContext,
+      }
+    );
+  }
+
+  /**
+   * Handle rate limiting with exponential backoff
+   */
+  protected async handleRateLimit(attempt: number, maxAttempts?: number): Promise<void> {
+    // Import here to avoid circular dependency
+    const { API_CONFIG } = await import('./ConfigurationConstants');
+    
+    const effectiveMaxAttempts = maxAttempts || API_CONFIG.RATE_LIMIT.MAX_ATTEMPTS;
+    
+    if (attempt >= effectiveMaxAttempts) {
+      throw this.createSyncError(
+        CollectionSyncErrorType.API_ERROR,
+        `Rate limit exceeded after ${effectiveMaxAttempts} attempts`
+      );
+    }
+
+    const delay = Math.min(
+      API_CONFIG.RATE_LIMIT.BASE_DELAY_MS * Math.pow(API_CONFIG.RATE_LIMIT.BACKOFF_MULTIPLIER, attempt), 
+      API_CONFIG.RATE_LIMIT.MAX_DELAY_MS
+    );
+    
+    logger.warn(
+      `Rate limit hit for ${this.source}, waiting ${delay}ms before retry (attempt ${attempt + 1}/${effectiveMaxAttempts})`,
+      {
+        label: `${this.source} Collections`,
+        attempt: attempt + 1,
+        maxAttempts: effectiveMaxAttempts,
+        delay,
+      }
+    );
+
+    await CollectionSyncUtils.delay(delay);
+  }
+
+  /**
+   * Create collection name with fallbacks and sanitization
+   */
+  protected async createSanitizedCollectionName(
+    config: CollectionConfig,
+    mediaType: 'movie' | 'tv',
+    fallbackName?: string
+  ): Promise<string> {
+    try {
+      const rawName = await this.generateCollectionName(config, mediaType);
+      return CollectionSyncUtils.sanitizeCollectionName(rawName);
+    } catch (error) {
+      logger.warn(
+        `Failed to generate collection name for ${config.name}, using fallback`,
+        {
+          label: `${this.source} Collections`,
+          configId: config.id,
+          error: error instanceof Error ? error.message : String(error),
+        }
+      );
+      
+      const fallback = fallbackName || config.name || `${this.source} Collection`;
+      return CollectionSyncUtils.sanitizeCollectionName(fallback);
+    }
+  }
+
+  /**
+   * Validate configuration with detailed error reporting
+   */
+  protected validateConfigurationDetailed(config: CollectionConfig, requiredFields: string[]): void {
+    const missingFields = CollectionSyncUtils.validateRequiredFields(config, requiredFields);
+    
+    if (missingFields.length > 0) {
+      throw this.createSyncError(
+        CollectionSyncErrorType.CONFIGURATION_ERROR,
+        `Configuration validation failed for ${config.name}`,
+        {
+          configId: config.id,
+          missingFields,
+          providedFields: Object.keys(config),
+        }
+      );
+    }
+  }
+
+  /**
+   * Standardized collection creation/update using incremental approach
+   * This is the ONLY method that should be used for collection updates
+   */
+  protected async createOrUpdateCollectionStandardized(
+    items: CollectionItem[],
+    collectionName: string,
+    mediaType: 'movie' | 'tv',
+    config: CollectionConfig,
+    plexClient: PlexAPI,
+    allCollections: any[],
+    processedCollectionKeys?: Set<string>,
+    userInfo?: { userId?: number | string; customLabel?: string }
+  ): Promise<CollectionOperationResult> {
+    // Support user-specific collections for services like Overseerr
+    const customLabel = userInfo?.customLabel || 
+      CollectionSyncUtils.createCollectionLabel(
+        this.source, 
+        config.id, 
+        userInfo?.userId ? Number(userInfo.userId) : undefined
+      );
+    
+    const updateStrategy = CollectionUpdateStrategy.create(plexClient, allCollections);
+    
+    const updateResult = await updateStrategy.createOrUpdateCollection(items, {
+      collectionName,
+      mediaType,
+      visibilityConfig: config.visibilityConfig || {
+        usersHome: true,
+        serverOwnerHome: false,
+        libraryRecommended: true,
+        libraryTabOnly: false,
+      },
+      customLabel,
+      sortOrderLibrary: config.sortOrderLibrary,
+      totalCollectionsInLibrary: (config as any)._totalCollectionsInLibrary,
+      customPoster: config.customPoster,
+      processedCollectionKeys,
+    });
+
+    // Update config with rating key if collection was created/updated
+    if (updateResult.collectionRatingKey) {
+      this.updateConfigWithRatingKey(config, updateResult.collectionRatingKey);
+    }
+
+    return {
+      created: updateResult.created,
+      updated: updateResult.updated,
+      collectionRatingKey: updateResult.collectionRatingKey,
+      itemCount: updateResult.itemCount,
+      stats: updateResult.updateStats,
+    };
   }
 
   // Abstract methods that must be implemented by subclasses
@@ -482,87 +702,63 @@ export abstract class BaseCollectionSync implements CollectionSyncInterface {
     }
   }
 
-}
-
-/**
- * Utility functions for collection sync operations
- */
-export class CollectionSyncUtils {
   /**
-   * Validate collection configuration
+   * Process collections using media type processing strategies
+   * This replaces duplicate media type handling logic across collection services
    */
-  static validateConfig(config: CollectionConfig): boolean {
-    return !!(
-      config.id &&
-      config.name &&
-      config.type &&
-      config.maxItems &&
-      config.maxItems > 0
-    );
-  }
+  protected async processWithMediaTypeStrategy(
+    items: CollectionItem[],
+    config: CollectionConfig,
+    plexClient: PlexAPI,
+    allCollections: any[],
+    processedCollectionKeys?: Set<string>,
+    userInfo?: { userId?: number | string; customLabel?: string }
+  ): Promise<MediaProcessingResult> {
+    const mediaType = config.mediaType as 'movie' | 'tv' | 'both';
+    
+    try {
+      // Get appropriate processor for the media type
+      const processor = mediaTypeProcessorFactory.getProcessor(mediaType, this);
+      
+      // Create processing context
+      const context: MediaProcessingContext = {
+        plexClient,
+        allCollections,
+        processedCollectionKeys,
+        userInfo,
+      };
 
-  /**
-   * Sanitize collection name for Plex
-   */
-  static sanitizeCollectionName(name: string): string {
-    return name
-      .replace(/[<>:"/\\|?*]/g, '') // Remove invalid characters
-      .replace(/\s+/g, ' ') // Collapse multiple spaces
-      .trim()
-      .substring(0, 100); // Limit length
-  }
+      // Process using the strategy
+      const result = await processor.process(items, config, context);
+      
+      logger.debug(`Media type processing completed`, {
+        label: `${this.source} Collections`,
+        configName: config.name,
+        mediaType,
+        created: result.created,
+        updated: result.updated,
+        itemCount: result.itemCount,
+      });
 
-  /**
-   * Create collection label for identification
-   */
-  static createCollectionLabel(
-    source: CollectionSource,
-    configId: number,
-    userId?: number
-  ): string {
-    const baseLabel = `overseerr:${source}:${configId}`;
-    return userId ? `${baseLabel}:user:${userId}` : baseLabel;
-  }
+      return result;
+    } catch (error) {
+      logger.error(`Media type processing failed`, {
+        label: `${this.source} Collections`,
+        configName: config.name,
+        mediaType,
+        error: error instanceof Error ? error.message : String(error),
+      });
 
-  /**
-   * Parse collection label to extract information
-   */
-  static parseCollectionLabel(label: string): {
-    source?: CollectionSource;
-    configId?: number;
-    userId?: number;
-  } {
-    const parts = label.split(':');
-    if (parts[0] !== 'overseerr' || parts.length < 3) {
-      return {};
+      return {
+        created: 0,
+        updated: 0,
+        itemCount: 0,
+        collectionKeys: [],
+        error: error instanceof Error ? error.message : String(error),
+      };
     }
-
-    const result: any = {
-      source: parts[1] as CollectionSource,
-      configId: parseInt(parts[2], 10),
-    };
-
-    if (parts.length >= 5 && parts[3] === 'user') {
-      result.userId = parseInt(parts[4], 10);
-    }
-
-    return result;
   }
 
-  /**
-   * Calculate progress percentage
-   */
-  static calculateProgress(current: number, total: number): number {
-    if (total === 0) return 100;
-    return Math.round((current / total) * 100);
-  }
-
-  /**
-   * Create a delay for rate limiting
-   */
-  static delay(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
-  }
 }
 
 export default BaseCollectionSync;

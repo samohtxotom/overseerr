@@ -66,7 +66,13 @@ const Modal = React.forwardRef<HTMLDivElement, ModalProps>(
   ) => {
     const intl = useIntl();
     const modalRef = useRef<HTMLDivElement>(null);
-    useClickOutside(modalRef, () => {
+    useClickOutside(modalRef, (e) => {
+      // Don't close modal if clicking on react-select dropdown
+      const target = e.target as Element;
+      if (target.closest('.react-select__menu') || target.closest('.react-select__menu-portal')) {
+        return;
+      }
+      
       if (onCancel && backgroundClickable) {
         onCancel();
       }

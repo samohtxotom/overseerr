@@ -391,41 +391,44 @@ hubsRoutes.get('/discover', isAuthenticated(), async (req, res) => {
           const hubId = `${library.key}-${hub.identifier}`;
           const hubName = HUB_DISPLAY_NAMES[hub.identifier] || hub.title || hub.identifier;
           
-          const isPromotedCollection = hub.identifier && hub.identifier.startsWith('custom.collection.');
+          // Determine the categorization based on hub identifier
+          const isDefaultPlexHub = !hub.identifier.startsWith('custom.collection.');
+          const isCustomCollection = hub.identifier && hub.identifier.startsWith('custom.collection.');
           
-          // Smart deduplication: Skip custom collection hubs that already exist as collections
-          if (isPromotedCollection) {
+          // For custom collections, determine if they're Agregarr-managed
+          let isAgregarrManaged = false;
+          if (isCustomCollection) {
             // Extract rating key from identifier: "custom.collection.1.35954" → "35954"
             const parts = hub.identifier.split('.');
             if (parts.length >= 4) {
               const ratingKey = parts[3];
               
-              // Check if we already have a collection with this rating key
+              // Check if we have a collection config with this rating key - that means it's Agregarr-managed
               const existingCollection = collectionConfigs.find(config => {
-                // Check both single rating key and multi-library rating keys
                 return config.collectionRatingKey === ratingKey ||
                        (config.collectionRatingKeys && config.collectionRatingKeys[library.key] === ratingKey);
               });
               
               if (existingCollection) {
-                logger.info(`Skipping custom collection hub - already exists as collection: ${hub.title}`, {
+                isAgregarrManaged = true;
+                logger.info(`Found Agregarr-managed collection promoted to hub: ${hub.title}`, {
                   label: 'Hub Discovery',
                   identifier: hub.identifier,
                   ratingKey,
                   collectionId: existingCollection.id,
                   collectionName: existingCollection.name,
                 });
-                return; // Skip adding this hub - it's already represented as a collection
+              } else {
+                logger.info(`Found pre-existing collection promoted to hub: ${hub.title}`, {
+                  label: 'Hub Discovery',
+                  identifier: hub.identifier,
+                  ratingKey,
+                  note: 'No matching Agregarr collection config found',
+                });
               }
             }
-            
-            logger.info(`Found unmanaged custom collection hub: ${hub.title}`, {
-              label: 'Hub Discovery',
-              identifier: hub.identifier,
-              note: 'No matching collection found - marking as unmanaged',
-            });
           }
-          
+
           const hubConfig = {
             id: hubId,
             hubIdentifier: hub.identifier,
@@ -434,8 +437,11 @@ hubsRoutes.get('/discover', isAuthenticated(), async (req, res) => {
             libraryName: library.title,
             mediaType,
             sortOrderLibrary: index,
-            isPromotedCollection,
-            isUnmanagedCollection: isPromotedCollection, // Custom collections without matching collection config are unmanaged
+            sortOrderHome: index,
+            // New cleaner categorization flags
+            isDefaultPlexHub,
+            isAgregarrManaged,
+            isPromotedToHub: isCustomCollection, // Custom collections are promoted to hub by definition
             visibilityConfig: {
               usersHome: hub.promotedToSharedHome === true || hub.promotedToSharedHome === '1',
               serverOwnerHome: hub.promotedToOwnHome === true || hub.promotedToOwnHome === '1',

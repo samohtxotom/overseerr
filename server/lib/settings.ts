@@ -115,6 +115,10 @@ export interface PlexHubConfig {
     libraryRecommended: boolean;
     libraryTabOnly: boolean;
   };
+  // Clear categorization flags
+  isDefaultPlexHub: boolean; // True for built-in algorithmic hubs (e.g., "Recently Added")  
+  isAgregarrManaged: boolean; // True if this collection/hub was created by Agregarr
+  isPromotedToHub: boolean; // True if this is a collection promoted to appear on home screen
 }
 
 export interface PlexSettings {
@@ -140,6 +144,15 @@ export interface TraktSettings {
 }
 
 export interface TautulliSettings {
+  hostname?: string;
+  port?: number;
+  useSsl?: boolean;
+  urlBase?: string;
+  apiKey?: string;
+  externalUrl?: string;
+}
+
+export interface OverseerrSettings {
   hostname?: string;
   port?: number;
   useSsl?: boolean;
@@ -368,6 +381,7 @@ interface AllSettings {
   main: MainSettings;
   plex: PlexSettings;
   tautulli: TautulliSettings;
+  overseerr: OverseerrSettings;
   trakt: TraktSettings;
   radarr: RadarrSettings[];
   sonarr: SonarrSettings[];
@@ -423,6 +437,7 @@ class Settings {
         usersHomeUnlocked: false,
       },
       tautulli: {},
+      overseerr: {},
       trakt: {},
       radarr: [],
       sonarr: [],
@@ -589,6 +604,14 @@ class Settings {
 
   set trakt(data: TraktSettings) {
     this.data.trakt = data;
+  }
+
+  get overseerr(): OverseerrSettings {
+    return this.data.overseerr;
+  }
+
+  set overseerr(data: OverseerrSettings) {
+    this.data.overseerr = data;
   }
 
   get radarr(): RadarrSettings[] {

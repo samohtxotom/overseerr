@@ -2,13 +2,14 @@ import TmdbAPI from '@server/api/themoviedb';
 import { MediaType } from '@server/constants/media';
 import { getRepository } from '@server/datasource';
 import Media from '@server/entity/Media';
-import { updateCollectionContents } from '@server/lib/collectionsUtils';
+// Legacy import removed - now using standardized approach via BaseCollectionSync
 import { BaseCollectionSync } from './BaseCollectionSync';
 import type { CollectionConfig } from '@server/lib/settings';
 import { CollectionSyncErrorType } from './types';
 import type { LetterboxdTemplateContext, LetterboxdSourceData, CollectionSyncOptions } from './types';
 import { autoRequestService } from './AutoRequestService';
 import logger from '@server/logger';
+import { API_CONFIG } from './ConfigurationConstants';
 
 interface LetterboxdListItem {
   title: string;
@@ -67,9 +68,9 @@ export class LetterboxdCollectionSync extends BaseCollectionSync {
 
       const response = await axios.get(config.letterboxdCustomListUrl, {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+          'User-Agent': API_CONFIG.USER_AGENT
         },
-        timeout: 10000
+        timeout: API_CONFIG.HTTP_TIMEOUT
       });
 
       // Parse the HTML to extract movie items
@@ -279,8 +280,8 @@ export class LetterboxdCollectionSync extends BaseCollectionSync {
       );
 
       return { 
-        created: result.isNew ? 1 : 0, 
-        updated: result.hasChanges && !result.isNew ? 1 : 0 
+        created: result.created, 
+        updated: result.updated 
       };
     } catch (error) {
       logger.error(`Error in Letterboxd processConfiguration for ${config.name}:`, {
@@ -301,17 +302,23 @@ export class LetterboxdCollectionSync extends BaseCollectionSync {
     config: any, 
     processedCollectionKeys?: Set<string>
   ) {
-    const dummyUser = { id: 0 } as any;
-    const result = await updateCollectionContents(
-      dummyUser, items, mediaType, plexClient, allCollections, config.visibilityConfig, 
-      collectionName, true, `overseerrletterboxd${config.id}`, processedCollectionKeys,
-      config.sortOrderLibrary, (config as any)._totalCollectionsInLibrary, config.customPoster
+    // Use the new standardized approach via BaseCollectionSync
+    const result = await this.createOrUpdateCollectionStandardized(
+      items,
+      collectionName,
+      mediaType,
+      config,
+      plexClient,
+      allCollections,
+      processedCollectionKeys
     );
+    
     return { 
-      isNew: result.isNew, 
-      hasChanges: result.hasChanges, 
-      collectionName, 
-      itemCount: items.length 
+      created: result.created,
+      updated: result.updated,
+      collectionRatingKey: result.collectionRatingKey,
+      itemCount: result.itemCount || items.length,
+      stats: result.stats
     };
   }
 

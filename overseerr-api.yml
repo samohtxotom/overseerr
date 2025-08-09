@@ -646,6 +646,33 @@ components:
           type: string
           nullable: true
           example: 'your-trakt-api-key-here'
+    OverseerrSettings:
+      type: object
+      properties:
+        hostname:
+          type: string
+          nullable: true
+          example: 'overseerr.example.com'
+        port:
+          type: number
+          nullable: true
+          example: 5055
+        useSsl:
+          type: boolean
+          nullable: true
+          example: false
+        urlBase:
+          type: string
+          nullable: true
+          example: '/overseerr'
+        apiKey:
+          type: string
+          nullable: true
+          example: 'your-overseerr-api-key-here'
+        externalUrl:
+          type: string
+          nullable: true
+          example: 'https://overseerr.example.com:5055'
     RadarrSettings:
       type: object
       properties:
@@ -2739,6 +2766,106 @@ paths:
                   message:
                     type: string
                     example: "Internal server error while fetching title"
+  /settings/plex/collections/preexisting:
+    get:
+      summary: Get pre-existing Plex collections
+      description: |
+        Retrieves all pre-existing Plex collections that are not managed by Agregarr.
+        
+        This endpoint fetches all collections from the connected Plex server and filters out 
+        any collections that have Overseerr labels (collections created/managed by Agregarr).
+        The remaining collections are considered "pre-existing" collections that existed 
+        before Agregarr or were created manually in Plex.
+        
+        **Authentication Required:** Admin permissions only.
+      tags:
+        - settings
+      responses:
+        '200':
+          description: Pre-existing collections retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  collections:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          description: Plex collection rating key
+                          example: "12345"
+                        name:
+                          type: string
+                          description: Collection name
+                          example: "Marvel Movies"
+                        summary:
+                          type: string
+                          description: Collection description/summary
+                          example: "A collection of Marvel superhero movies"
+                        libraryId:
+                          type: string
+                          description: ID of the Plex library containing this collection
+                          example: "1"
+                        libraryTitle:
+                          type: string
+                          description: Name of the Plex library containing this collection
+                          example: "Movies"
+                        itemCount:
+                          type: integer
+                          description: Number of items in the collection
+                          example: 25
+                        thumb:
+                          type: string
+                          description: Collection thumbnail/poster path
+                          example: "/library/metadata/12345/thumb/1234567890"
+                        art:
+                          type: string
+                          description: Collection background art path
+                          example: "/library/metadata/12345/art/1234567890"
+                        guid:
+                          type: string
+                          description: Collection GUID
+                          example: "com.plexapp.agents.themoviedb://collection/531"
+                        updatedAt:
+                          type: integer
+                          description: Unix timestamp when collection was last updated
+                          example: 1609459200
+                        addedAt:
+                          type: integer
+                          description: Unix timestamp when collection was created
+                          example: 1609459200
+                        labels:
+                          type: array
+                          items:
+                            type: string
+                          description: Array of labels/tags associated with the collection
+                          example: ["action", "superhero"]
+        '400':
+          description: Bad request - Plex server not configured or admin user missing
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    enum:
+                      - "Plex server not configured"
+                      - "No Plex token found for admin user"
+                    example: "Plex server not configured"
+        '500':
+          description: Server error - Failed to connect to Plex or fetch collections
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Failed to fetch pre-existing collections"
   /settings/hubs/discover:
     get:
       summary: Discover available Plex hubs
@@ -3291,6 +3418,89 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TraktSettings'
+  /settings/overseerr:
+    get:
+      summary: Get Overseerr settings
+      description: Retrieves current Overseerr connection settings for external instances.
+      tags:
+        - settings
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OverseerrSettings'
+    post:
+      summary: Update Overseerr settings
+      description: Updates Overseerr connection settings and tests the connection.
+      tags:
+        - settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OverseerrSettings'
+      responses:
+        '200':
+          description: 'Values were successfully updated'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OverseerrSettings'
+        '500':
+          description: 'Connection test failed'
+  /overseerr/test:
+    post:
+      summary: Test Overseerr connection
+      description: Tests connection to an external Overseerr instance.
+      tags:
+        - other
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                hostname:
+                  type: string
+                  example: 'overseerr.example.com'
+                port:
+                  type: number
+                  example: 5055
+                apiKey:
+                  type: string
+                  example: 'your-api-key-here'
+                useSsl:
+                  type: boolean
+                  example: false
+                urlBase:
+                  type: string
+                  example: '/overseerr'
+              required:
+                - hostname
+                - port
+                - apiKey
+      responses:
+        '200':
+          description: 'Connection test successful'
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  version:
+                    type: string
+                    example: '1.33.2'
+        '400':
+          description: 'Missing required parameters'
+        '500':
+          description: 'Connection test failed'
   /settings/radarr:
     get:
       summary: Get Radarr settings

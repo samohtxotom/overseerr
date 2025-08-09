@@ -1,10 +1,11 @@
 import type PlexAPI from '@server/api/plexapi';
 import TautulliAPI from '@server/api/tautulli';
-import { updateCollectionContents } from '@server/lib/collectionsUtils';
+// Legacy import removed - now using standardized approach via BaseCollectionSync
 import type { CollectionConfig } from '@server/lib/settings';
 import { getSettings } from '@server/lib/settings';
 // import { extractErrorMessage } from '@server/lib/utils/templateUtils'; // Not needed in new implementation
 import logger from '@server/logger';
+import { COLLECTION_LIMITS, getRuntimeConfig } from './ConfigurationConstants';
 import { BaseCollectionSync } from './BaseCollectionSync';
 import type {
   CollectionItem,
@@ -97,14 +98,8 @@ export class TautulliCollectionSync extends BaseCollectionSync {
           return { created: 0, updated: 0 };
         }
 
-        return await this.processSingleMediaType(
-          items,
-          config,
-          plexClient,
-          allCollections,
-          processedCollectionKeys,
-          stats
-        );
+        // Use the new media type processing strategy
+        return await this.processWithMediaTypeStrategy(items, config, plexClient, allCollections, processedCollectionKeys);
       }
     } catch (error) {
       throw this.createSyncError(
@@ -181,7 +176,7 @@ export class TautulliCollectionSync extends BaseCollectionSync {
     missingItems?: MissingItem[];
     stats?: FilteringStats;
   }> {
-    const minimumPlays = 3;
+    const minimumPlays = COLLECTION_LIMITS.MINIMUM_PLAYS;
 
     const filteredItems = sourceData.filter((item) => {
       const totalPlays = item.total_plays || item.plays || 0;
@@ -227,34 +222,26 @@ export class TautulliCollectionSync extends BaseCollectionSync {
     processedCollectionKeys?: Set<string>
   ): Promise<CollectionOperationResult> {
     try {
-      // For Tautulli collections, we don't need a real user since we provide custom title and use global collection mode
-      // The user parameter is ignored when customTitle and isGlobalCollection=true are provided
-      const dummyUser = { id: 0 } as any; // Minimal object to satisfy function signature
-
-      const result = await updateCollectionContents(
-        dummyUser, // Not used due to customTitle + isGlobalCollection=true
+      // Use the new standardized approach via BaseCollectionSync
+      const result = await this.createOrUpdateCollectionStandardized(
         items,
+        collectionName,
         mediaType,
+        config,
         plexClient,
         allCollections,
-        config.visibilityConfig,
-        collectionName,
-        true, // isTautulliCollection
-        `OverseerrTautulli${config.id}`, // Custom label
-        processedCollectionKeys,
-        config.sortOrderLibrary,
-        (config as any)._totalCollectionsInLibrary,
-        config.customPoster
+        processedCollectionKeys
       );
 
       // Update config with rating key if we got one
       this.updateConfigWithRatingKey(config, result.collectionRatingKey);
 
       return {
-        isNew: result.isNew,
-        hasChanges: result.hasChanges,
-        collectionName,
-        itemCount: items.length,
+        created: result.created,
+        updated: result.updated,
+        collectionRatingKey: result.collectionRatingKey,
+        itemCount: result.itemCount || items.length,
+        stats: result.stats,
       };
     } catch (error) {
       throw this.createSyncError(
@@ -288,7 +275,7 @@ export class TautulliCollectionSync extends BaseCollectionSync {
 
   private getTimeRangeDays(config: CollectionConfig): number {
     // New implementation only supports modern customDays config
-    return config.customDays && config.customDays > 0 ? config.customDays : 30;
+    return config.customDays && config.customDays > 0 ? config.customDays : COLLECTION_LIMITS.DEFAULT_TIME_PERIOD_DAYS;
   }
 
   private getSubtypeFromConfig(config: CollectionConfig): string {
@@ -341,8 +328,8 @@ export class TautulliCollectionSync extends BaseCollectionSync {
           processedCollectionKeys
         );
 
-        totalCreated += movieResult.isNew ? 1 : 0;
-        totalUpdated += movieResult.hasChanges && !movieResult.isNew ? 1 : 0;
+        totalCreated += movieResult.created;
+        totalUpdated += movieResult.updated;
 
         // Log movie processing stats
         if (movieStats && movieStats.removed > 0) {
@@ -398,8 +385,8 @@ export class TautulliCollectionSync extends BaseCollectionSync {
           processedCollectionKeys
         );
 
-        totalCreated += tvResult.isNew ? 1 : 0;
-        totalUpdated += tvResult.hasChanges && !tvResult.isNew ? 1 : 0;
+        totalCreated += tvResult.created;
+        totalUpdated += tvResult.updated;
 
         // Log TV processing stats
         if (tvStats && tvStats.removed > 0) {
@@ -434,123 +421,6 @@ export class TautulliCollectionSync extends BaseCollectionSync {
     return { created: totalCreated, updated: totalUpdated };
   }
 
-  private async processBothMediaTypes(
-    items: TautulliCollectionItem[],
-    config: CollectionConfig,
-    plexClient: PlexAPI,
-    allCollections: any[],
-    processedCollectionKeys?: Set<string>,
-    stats?: FilteringStats
-  ): Promise<SyncResult> {
-    let totalCreated = 0;
-    let totalUpdated = 0;
-
-    // Split items by media type
-    const { movieItems, tvItems } = this.splitItemsByMediaType(items);
-
-    // Process movies if we have any
-    if (movieItems.length > 0) {
-      const movieCollectionName = await this.generateCollectionNameWithCustom(config, 'movie');
-      const movieResult = await this.createCollection(
-        movieItems,
-        'movie',
-        movieCollectionName,
-        plexClient,
-        allCollections,
-        config,
-        processedCollectionKeys
-      );
-
-      totalCreated += movieResult.isNew ? 1 : 0;
-      totalUpdated += movieResult.hasChanges && !movieResult.isNew ? 1 : 0;
-    } else {
-      logger.warn('No movie items to create collection from', {
-        label: 'Tautulli Collections',
-        configName: config.name,
-      });
-    }
-
-    // Process TV shows if we have any
-    if (tvItems.length > 0) {
-      const tvCollectionName = await this.generateCollectionNameWithCustom(config, 'tv');
-      const tvResult = await this.createCollection(
-        tvItems,
-        'tv',
-        tvCollectionName,
-        plexClient,
-        allCollections,
-        config,
-        processedCollectionKeys
-      );
-
-      totalCreated += tvResult.isNew ? 1 : 0;
-      totalUpdated += tvResult.hasChanges && !tvResult.isNew ? 1 : 0;
-    } else {
-      logger.warn('No TV items to create collection from', {
-        label: 'Tautulli Collections',
-        configName: config.name,
-      });
-    }
-
-    // Log filtering summary if stats are provided
-    if (stats && stats.removed > 0) {
-      logger.info(
-        `Tautulli collection processed: ${items.length} final items (${stats.removed} items filtered out from ${stats.original} total)`,
-        {
-          label: 'Tautulli Collections',
-          configName: config.name,
-          finalItems: items.length,
-          originalCount: stats.original,
-          filteredCount: stats.filtered,
-          removedCount: stats.removed,
-        }
-      );
-    }
-
-    return { created: totalCreated, updated: totalUpdated };
-  }
-
-  private async processSingleMediaType(
-    items: TautulliCollectionItem[],
-    config: CollectionConfig,
-    plexClient: PlexAPI,
-    allCollections: any[],
-    processedCollectionKeys?: Set<string>,
-    stats?: FilteringStats
-  ): Promise<SyncResult> {
-    const mediaType = config.mediaType as 'movie' | 'tv';
-    const collectionName = await this.generateCollectionName(config, mediaType);
-
-    const result = await this.createCollection(
-      items,
-      mediaType,
-      collectionName,
-      plexClient,
-      allCollections,
-      config,
-      processedCollectionKeys
-    );
-
-    // Log filtering summary if stats are provided
-    if (stats && stats.removed > 0) {
-      logger.info(
-        `Tautulli collection processed: ${items.length} final items (${stats.removed} items filtered out from ${stats.original} total)`,
-        {
-          label: 'Tautulli Collections',
-          configName: config.name,
-          finalItems: items.length,
-          originalCount: stats.original,
-          filteredCount: stats.filtered,
-          removedCount: stats.removed,
-        }
-      );
-    }
-
-    return {
-      created: result.isNew ? 1 : 0,
-      updated: result.hasChanges && !result.isNew ? 1 : 0,
-    };
-  }
 }
 
 // Export the new implementation

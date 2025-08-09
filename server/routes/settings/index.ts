@@ -1,6 +1,7 @@
 import PlexAPI from '@server/api/plexapi';
 import PlexTvAPI from '@server/api/plextv';
 import TautulliAPI from '@server/api/tautulli';
+import OverseerrAPI from '@server/api/overseerr';
 import { getRepository } from '@server/datasource';
 import Media from '@server/entity/Media';
 import { MediaRequest } from '@server/entity/MediaRequest';
@@ -358,6 +359,69 @@ settingsRoutes.post('/trakt', async (req, res) => {
   settings.save();
 
   return res.status(200).json(settings.trakt);
+});
+
+settingsRoutes.get('/overseerr', (_req, res) => {
+  const settings = getSettings();
+
+  res.status(200).json(settings.overseerr);
+});
+
+settingsRoutes.post('/overseerr', async (req, res, next) => {
+  const settings = getSettings();
+
+  Object.assign(settings.overseerr, req.body);
+
+  if (settings.overseerr.hostname) {
+    try {
+      const overseerrClient = new OverseerrAPI(settings.overseerr);
+
+      const result = await overseerrClient.testConnection();
+
+      if (!result.success) {
+        throw new Error('Unable to connect to Overseerr');
+      }
+
+      settings.save();
+    } catch (e) {
+      logger.error('Something went wrong testing Overseerr connection', {
+        label: 'API',
+        errorMessage: e.message,
+      });
+      return next({
+        status: 500,
+        message: 'Unable to connect to Overseerr.',
+      });
+    }
+  }
+
+  return res.status(200).json(settings.overseerr);
+});
+
+settingsRoutes.post('/overseerr/test', async (req, res, next) => {
+  try {
+    const overseerrClient = new OverseerrAPI(req.body);
+
+    const result = await overseerrClient.testConnection();
+
+    if (!result.success) {
+      throw new Error('Unable to connect to Overseerr');
+    }
+
+    return res.status(200).json({
+      success: true,
+      version: result.version,
+    });
+  } catch (e) {
+    logger.error('Overseerr connection test failed', {
+      label: 'API',
+      errorMessage: e.message,
+    });
+    return next({
+      status: 500,
+      message: 'Unable to connect to Overseerr.',
+    });
+  }
 });
 
 settingsRoutes.get(

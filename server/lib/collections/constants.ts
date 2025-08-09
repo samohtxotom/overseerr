@@ -1,34 +1,42 @@
 /**
  * Essential constants for Plex Collections feature
+ * 
+ * @deprecated Most values have been moved to ConfigurationConstants.ts
+ * This file is maintained for backward compatibility
  */
 
-// Label constants
+import { 
+  LABEL_CONFIG, 
+  BATCH_CONFIG, 
+  SORT_CONFIG, 
+  CACHE_CONFIG 
+} from './ConfigurationConstants';
+
+// Label constants (now configurable)
 export const LABELS = {
-  PREFIX: 'overseerr',
+  PREFIX: LABEL_CONFIG.LEGACY_PREFIX,
 } as const;
 
-// Basic constants
+// Basic constants (now configurable where appropriate)
 export const DEFAULTS = {
-  ADMIN_USER_ID: 1,
-  BATCH_SIZE: 5,
-  EMPTY_LENGTH: 0,
+  ADMIN_USER_ID: 1, // This remains hardcoded as it's a system constant
+  BATCH_SIZE: BATCH_CONFIG.COLLECTION_BATCH_SIZE,
+  EMPTY_LENGTH: 0, // This remains hardcoded as it's a language constant
 } as const;
 
-// Character sanitization patterns
+// Character sanitization patterns (these remain static)
 export const SANITIZATION = {
   UNSAFE_CHARS: /[<>"'&]/g,
   WHITESPACE: /\s+/g,
 } as const;
 
-// Removed: COLLECTION_THRESHOLDS - always recreate collections
-
-// Sort title prefix for collections
+// Sort title prefix for collections (now configurable)
 export const SORT_CONSTANTS = {
-  COLLECTION_SORT_PREFIX: '!!',
+  COLLECTION_SORT_PREFIX: SORT_CONFIG.SORT_PREFIXES.MEDIUM_PRIORITY,
 } as const;
 
-// Simple cache settings
+// Cache settings (now configurable)
 export const CACHE_SETTINGS = {
-  SHARED_SERVER_TTL: 5 * 60 * 1000, // 5 minutes
-  TOKEN_CACHE_LENGTH: 8,
+  SHARED_SERVER_TTL: CACHE_CONFIG.SHARED_SERVER_TTL,
+  TOKEN_CACHE_LENGTH: 8, // This remains hardcoded as it's a technical constant
 } as const;
